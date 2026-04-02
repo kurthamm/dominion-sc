@@ -213,11 +213,22 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
 
     def get_statistic_id(self, total_key: str) -> str | None:
         """Return recorder statistic_id (sensor entity based) used by Energy Dashboard."""
+        # The actual entity IDs created by this integration use the device
+        # name "Dominion SC Energy" and HA's entity naming rules. Those
+        # entities are generated as e.g.
+        #   sensor.dominion_sc_energy_electric_cumulative_consumption
+        # Importing statistics under the plain names (e.g. "sensor.electric_cumulative_consumption")
+        # will not link the recorder statistics to the real entity_id and
+        # therefore they won't appear as selectable Energy Dashboard sensors.
+        #
+        # Use the device-based entity IDs so recorder data matches the
+        # actual `entity_id` present in the entity registry.
+        base = "dominion_sc_energy"
         mapping = {
-            TOTAL_ELECTRIC_KWH: "sensor.electric_cumulative_consumption",
-            TOTAL_GAS_FT3: "sensor.gas_cumulative_consumption",
-            TOTAL_ELECTRIC_COST: "sensor.electric_cumulative_cost",
-            TOTAL_GAS_COST: "sensor.gas_cumulative_cost",
+            TOTAL_ELECTRIC_KWH: f"sensor.{base}_electric_cumulative_consumption",
+            TOTAL_GAS_FT3: f"sensor.{base}_gas_cumulative_consumption",
+            TOTAL_ELECTRIC_COST: f"sensor.{base}_electric_cumulative_cost",
+            TOTAL_GAS_COST: f"sensor.{base}_gas_cumulative_cost",
         }
         return mapping.get(total_key)
 
