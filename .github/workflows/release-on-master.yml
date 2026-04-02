@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate release version (date + increment + shortsha) and build release body
+      - name: Generate release version (date.increment) and build release body
         id: gen_version
         shell: bash
         run: |
@@ -32,15 +32,14 @@ jobs:
 
           DATE=$(date -u +%Y.%m.%d)
 
-          # gather tags for today (patterns like vDATE-...)
-          mapfile -t TAGS < <(git tag -l "v${DATE}-*")
+          # gather tags for today in the dotted format YYYY.MM.DD.NN (we no longer support legacy 'v' or '-' formats)
+          mapfile -t TAGS < <(git tag -l | grep -E "^${DATE}\." || true)
 
           max=0
           for t in "${TAGS[@]:-}"; do
-            # remove prefix vDATE-
-            rest=${t#v${DATE}-}
-            # Expect incremented form: N or N-SHA (we accept both; numeric prefix at start)
-            maybe=${rest%%-*}
+            # rest after DATE. (tags are expected to be like DATE.NN or DATE.NN.anything)
+            rest=${t#${DATE}.}
+            maybe=${rest%%.*}
             if [[ "$maybe" =~ ^[0-9]+$ ]]; then
               # force base-10 interpretation to avoid octal issues with leading zeros
               num=$((10#$maybe))
@@ -52,7 +51,8 @@ jobs:
 
           next=$((max + 1))
           PADDED=$(printf "%02d" "$next")
-          VERSION="v${DATE}-${PADDED}"
+          # Use dotted format (no leading 'v') compatible with Home Assistant manifests: YYYY.MM.DD.NN
+          VERSION="${DATE}.${PADDED}"
           echo "Computed version: $VERSION"
 
           # Build a helpful release body: commits and merged PRs (if any)
@@ -65,7 +65,7 @@ jobs:
 
           # Assemble body
           BODY="Automated release for commit ${GITHUB_SHA}\n\n"
-          BODY+="Tag: ${VERSION}\n"
+          BODY+="Version: ${VERSION}\n"
           BODY+="Commit: ${REPO_URL}/commit/${GITHUB_SHA}\n\n"
           BODY+="Changelog (latest commits):\n${COMMITS}\n\n"
           if [[ -n "${PRS// /}" ]]; then
