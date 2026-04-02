@@ -20,7 +20,7 @@ A custom Home Assistant integration for **Dominion Energy South Carolina** that 
 ## Requirements
 
 - Home Assistant **2026.4.0** or later
-- A Dominion Energy South Carolina online account ([dominionenergy.com](https://www.dominionenergy.com/))
+- A [Dominion Energy South Carolina](https://www.dominionenergy.com/south-carolina) online account
 - HACS (for easy installation) or manual installation
 
 ## Installation
@@ -31,7 +31,7 @@ A custom Home Assistant integration for **Dominion Energy South Carolina** that 
 2. Go to **Integrations** → **⋮ (menu)** → **Custom repositories**.
 3. Add this repository URL and select **Integration** as the category:
    ```
-   https://github.com/<your-username>/ha-dominionsc-energy
+   https://github.com/kilo323/dominion-sc
    ```
 4. Click **Add**, then find **Dominion SC Energy** in the HACS store and click **Download**.
 5. Restart Home Assistant.
@@ -46,7 +46,7 @@ A custom Home Assistant integration for **Dominion Energy South Carolina** that 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for **Dominion SC Energy**.
 3. Enter your Dominion Energy credentials:
-   - **Username** (email)
+   - **Username**
    - **Password**
 4. If your account requires two-factor authentication:
    - Select your preferred 2FA method (SMS or email).
