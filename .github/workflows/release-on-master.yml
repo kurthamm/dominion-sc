@@ -115,7 +115,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: bump manifest version to $VERSION [skip ci]"
+            git commit -m "Bump version to $VERSION [skip ci]"
             git push origin HEAD:master
           fi
 
