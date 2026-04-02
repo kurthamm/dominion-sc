@@ -2,10 +2,7 @@
 .env
 .env.*
 dominion_cookies.json
-ha_config/
-ha_config/*.db
-ha_config/*.log
-ha_config/.storage/
+ha_config/*
 reference/
 scripts/.*
 scripts/json_dumps/
