@@ -1,0 +1,132 @@
+name: Release on master
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # avoid running when the job itself pushed a commit with [skip ci]
+    # For push events: skip if head commit message contains [skip ci].
+    # For workflow_dispatch or other events, proceed.
+    if: "!(github.event_name == 'push' && contains(github.event.head_commit.message, '[skip ci]'))"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release version (date + increment + shortsha) and build release body
+        id: gen_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ensure tags are fetched so we can inspect existing tags for today's date
+          git fetch --prune --tags origin
+
+          DATE=$(date -u +%Y.%m.%d)
+          SHORT_SHA=${GITHUB_SHA::7}
+
+          # gather tags for today (patterns like vDATE-...)
+          mapfile -t TAGS < <(git tag -l "v${DATE}-*")
+
+          max=0
+          for t in "${TAGS[@]:-}"; do
+            # remove prefix vDATE-
+            rest=${t#v${DATE}-}
+            # Expect incremented form: N-SHA (e.g., 1-abcdef1)
+            if [[ "$rest" == *"-"* ]]; then
+              maybe=${rest%%-*}
+              if [[ "$maybe" =~ ^[0-9]+$ ]]; then
+                if (( maybe > max )); then
+                  max=$maybe
+                fi
+              fi
+            fi
+          done
+
+          next=$((max + 1))
+          VERSION="v${DATE}-${next}-${SHORT_SHA}"
+          echo "Computed version: $VERSION"
+
+          # Build a helpful release body: commits and merged PRs (if any)
+          COMMITS=$(git --no-pager log -n 20 --pretty=format:'- %h %s (%an)' HEAD)
+
+          # Look for merged PR numbers in recent commit messages
+          PRS=$(git --no-pager log -n 50 --pretty=%B | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
+
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+
+          # Assemble body
+          BODY="Automated release for commit ${GITHUB_SHA}\n\n"
+          BODY+="Tag: ${VERSION}\n"
+          BODY+="Commit: ${REPO_URL}/commit/${GITHUB_SHA}\n\n"
+          BODY+="Changelog (latest commits):\n${COMMITS}\n\n"
+          if [[ -n "${PRS// /}" ]]; then
+            BODY+="Associated PRs:\n"
+            for pr in ${PRS}; do
+              BODY+="- ${REPO_URL}/pull/${pr}\n"
+            done
+            BODY+="\n"
+          fi
+
+          # Write multiline outputs
+          printf 'version=%s
+release_body<<EOF
+%s
+EOF
+' "$VERSION" "$BODY" >> $GITHUB_OUTPUT
+
+      - name: Update manifest.json
+        env:
+          MANIFEST_PATH: custom_components/dominionsc/manifest.json
+          VERSION: ${{ steps.gen_version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json,os
+          p=os.environ['MANIFEST_PATH']
+          with open(p,'r', encoding='utf-8') as f:
+            data=json.load(f)
+          old=data.get('version')
+          new=os.environ['VERSION']
+          if old==new:
+            print('manifest already up-to-date:', new)
+            # exit without error; nothing to commit
+            raise SystemExit(0)
+          data['version']=new
+          with open(p,'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+          print('Updated manifest version from', old, 'to', new)
+          PY
+
+      - name: Commit manifest (if changed) and push
+        env:
+          MANIFEST_PATH: custom_components/dominionsc/manifest.json
+          VERSION: ${{ steps.gen_version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST_PATH"
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: bump manifest version to $VERSION [skip ci]"
+            git push origin HEAD:master
+          fi
+
+      - name: Create GitHub release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.gen_version.outputs.version }}
+          release_name: ${{ steps.gen_version.outputs.version }}
+          body: ${{ steps.gen_version.outputs.release_body }}
+          draft: false
+          prerelease: false
