@@ -36,6 +36,7 @@ SERVICE_SCHEMA = (
         {
             vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
             vol.Optional("overwrite", default=False): cv.boolean,
+            vol.Optional("allow_initialize_missing", default=False): cv.boolean,
         }
     )
     if vol is not None and cv is not None
@@ -158,13 +159,14 @@ async def _async_handle_backfill_service(hass, call) -> None:
 
     target_entry_id = call.data.get(ATTR_CONFIG_ENTRY_ID)
     overwrite = bool(call.data.get("overwrite", False))
+    allow_initialize_missing = bool(call.data.get("allow_initialize_missing", False))
 
     entries = hass.data.get(DOMAIN, {})
     for entry_id, runtime in entries.items():
         if target_entry_id and entry_id != target_entry_id:
             continue
         coordinator: DominionSCCoordinator = runtime[COORDINATOR]
-        await coordinator.async_run_backfill(overwrite=overwrite)
+        await coordinator.async_run_backfill(overwrite=overwrite, allow_initialize_missing=allow_initialize_missing)
 
 
 async def _async_handle_rewrite_statistics_service(hass, call) -> None:

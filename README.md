@@ -103,6 +103,7 @@ Manually trigger a backfill cycle.
 |-----------|------|---------|-------------|
 | `config_entry_id` | string | _(all entries)_ | Target a specific config entry |
 | `overwrite` | boolean | `false` | If `true`, re-imports the cycle and replaces prior stored values |
+| `allow_initialize_missing` | boolean | `false` | If `true`, allow the service to repopulate the internal `missing_cycles` list when empty (forces initialization). If `false` (default), manual calls will warn-and-exit when there are no incomplete cycles to process. |
 
 ### `dominionsc.rewrite_statistics`
 

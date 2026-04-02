@@ -92,7 +92,12 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         start = date(now.year, now.month, 1)
         return BillingCycle(start=start, end=now)
 
-    async def async_run_backfill(self, overwrite: bool = False, cycle_key: str | None = None) -> None:
+    async def async_run_backfill(
+        self,
+        overwrite: bool = False,
+        cycle_key: str | None = None,
+        allow_initialize_missing: bool = False,
+    ) -> None:
         """Manually process one backfill cycle."""
         _LOGGER.debug(
             "Manual backfill requested: entry=%s overwrite=%s cycle_key=%s",
@@ -101,7 +106,12 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             cycle_key,
         )
         await self._ensure_authenticated()
-        await self._process_backfill(overwrite=overwrite, cycle_key=cycle_key)
+        # When triggered manually via the service/button, callers may choose
+        # whether to allow repopulating missing cycles. Pass the flag through
+        # to the processing routine.
+        await self._process_backfill(
+            overwrite=overwrite, cycle_key=cycle_key, allow_initialize_missing=allow_initialize_missing
+        )
         await self._sync_external_statistics(force_rewrite=overwrite)
         self._apply_monotonic_guard()
         await self._save_state()
@@ -601,8 +611,33 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             self._upsert_daily_cost(f"electric|{day_key}", float(row["electric_cost"]), True, TOTAL_ELECTRIC_COST)
             self._upsert_daily_cost(f"gas|{day_key}", float(row["gas_cost"]), True, TOTAL_GAS_COST)
 
-    async def _process_backfill(self, overwrite: bool, cycle_key: str | None = None) -> None:
-        self._initialize_backfill_cycles()
+    async def _process_backfill(
+        self,
+        overwrite: bool,
+        cycle_key: str | None = None,
+        allow_initialize_missing: bool = True,
+    ) -> None:
+        """Process a backfill cycle.
+
+        allow_initialize_missing controls whether the missing_cycles list may be
+        lazily repopulated when empty. Scheduled automatic updates should allow
+        initialization; manual service/button invocations will pass
+        allow_initialize_missing=False so they can early-exit when there are no
+        incomplete cycles to process.
+        """
+        if allow_initialize_missing:
+            self._initialize_backfill_cycles()
+        else:
+            # Manual invocation: if there are no missing cycles, warn and exit
+            backfill_state = self._state.get("backfill", {})
+            missing = backfill_state.get("missing_cycles", []) if isinstance(backfill_state, dict) else []
+            if not missing:
+                _LOGGER.warning(
+                    "Manual backfill requested but no incomplete backfill cycles to process for entry=%s",
+                    self.config_entry.entry_id,
+                )
+                return
+
         cycle = self._pick_cycle_for_backfill(overwrite=overwrite, cycle_key=cycle_key)
         if cycle is None:
             _LOGGER.debug("Backfill skipped: no eligible cycle (overwrite=%s)", overwrite)
