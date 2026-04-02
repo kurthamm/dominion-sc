@@ -63,23 +63,26 @@ jobs:
 
           REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
 
-          # Assemble body
-          BODY="Automated release for commit ${GITHUB_SHA}\n\n"
-          BODY+="Version: ${VERSION}\n"
-          BODY+="Commit: ${REPO_URL}/commit/${GITHUB_SHA}\n\n"
-          BODY+="Changelog (latest commits):\n${COMMITS}\n\n"
-          if [[ -n "${PRS// /}" ]]; then
-            BODY+="Associated PRs:\n"
-            for pr in ${PRS}; do
-              BODY+="- ${REPO_URL}/pull/${pr}\n"
-            done
-            BODY+="\n"
-          fi
-
-          # Write multiline outputs
+          # Write multiline outputs to GITHUB_OUTPUT using a heredoc so newlines are preserved
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "release_body<<EOF" >> $GITHUB_OUTPUT
-          echo "$BODY" >> $GITHUB_OUTPUT
+          cat <<EOF >> $GITHUB_OUTPUT
+          Automated release for commit ${GITHUB_SHA}
+
+          Version: ${VERSION}
+          Commit: ${REPO_URL}/commit/${GITHUB_SHA}
+
+          Changelog (latest commits):
+          ${COMMITS}
+
+          EOF
+          if [[ -n "${PRS// /}" ]]; then
+            echo "Associated PRs:" >> $GITHUB_OUTPUT
+            for pr in ${PRS}; do
+              echo "- ${REPO_URL}/pull/${pr}" >> $GITHUB_OUTPUT
+            done
+            echo "" >> $GITHUB_OUTPUT
+          fi
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Update manifest.json
