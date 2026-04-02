@@ -2,7 +2,7 @@
   "domain": "dominionsc",
   "name": "Dominion SC Energy",
   "homeassistant": "2026.4.0",
-  "version": "0.1.0",
+  "version": "v2026.04.02-1-f6b7922",
   "config_flow": true,
   "iot_class": "cloud_polling",
   "documentation": "https://github.com/kilo323/ha-dominionsc-energy",
@@ -10,5 +10,7 @@
     "beautifulsoup4>=4.12.3"
   ],
   "dependencies": [],
-  "codeowners": ["@kilo323"]
+  "codeowners": [
+    "@kilo323"
+  ]
 }
