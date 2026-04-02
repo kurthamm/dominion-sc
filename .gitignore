@@ -1,0 +1,20 @@
+﻿# Secrets and local state (keep these local only)
+.env
+.env.* 
+dominion_cookies.json
+ha_config/
+ha_config/*.db
+ha_config/*.log
+ha_config/.storage/
+reference/
+scripts/.*
+*.sqlite
+*.db
+*.log
+
+# Python / dev artifacts
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+*.env
