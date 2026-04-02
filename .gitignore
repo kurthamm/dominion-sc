@@ -22,3 +22,4 @@ __pycache__/
 
 # whitelists
 !.env.example
+!ha_config/configuration.yaml
