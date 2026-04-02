@@ -31,7 +31,6 @@ jobs:
           git fetch --prune --tags origin
 
           DATE=$(date -u +%Y.%m.%d)
-          SHORT_SHA=${GITHUB_SHA::7}
 
           # gather tags for today (patterns like vDATE-...)
           mapfile -t TAGS < <(git tag -l "v${DATE}-*")
@@ -40,19 +39,20 @@ jobs:
           for t in "${TAGS[@]:-}"; do
             # remove prefix vDATE-
             rest=${t#v${DATE}-}
-            # Expect incremented form: N-SHA (e.g., 1-abcdef1)
-            if [[ "$rest" == *"-"* ]]; then
-              maybe=${rest%%-*}
-              if [[ "$maybe" =~ ^[0-9]+$ ]]; then
-                if (( maybe > max )); then
-                  max=$maybe
-                fi
+            # Expect incremented form: N or N-SHA (we accept both; numeric prefix at start)
+            maybe=${rest%%-*}
+            if [[ "$maybe" =~ ^[0-9]+$ ]]; then
+              # force base-10 interpretation to avoid octal issues with leading zeros
+              num=$((10#$maybe))
+              if (( num > max )); then
+                max=$num
               fi
             fi
           done
 
           next=$((max + 1))
-          VERSION="v${DATE}-${next}-${SHORT_SHA}"
+          PADDED=$(printf "%02d" "$next")
+          VERSION="v${DATE}-${PADDED}"
           echo "Computed version: $VERSION"
 
           # Build a helpful release body: commits and merged PRs (if any)
