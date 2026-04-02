@@ -77,11 +77,10 @@ jobs:
           fi
 
           # Write multiline outputs
-          printf 'version=%s
-release_body<<EOF
-%s
-EOF
-' "$VERSION" "$BODY" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "release_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Update manifest.json
         env:
