@@ -277,3 +277,12 @@ async def test_process_intervals_dedupe(monkeypatch):
     # totals should remain unchanged and accepted count should be the same
     assert coord.totals == totals_after_first
     assert coord._state["stats"]["accepted_interval_rows"] == accepted_after_first
+
+
+    def test_coordinator_properties_default_empty(monkeypatch):
+        """Coordinator should expose account/billing properties and default to empty dicts."""
+        coord = make_coordinator(None)
+        assert coord.account_summary == {}
+        assert coord.bill_projection == {}
+        assert coord.current_bill_summary == {}
+        assert coord.current_daily_usage == {}

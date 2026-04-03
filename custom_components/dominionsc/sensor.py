@@ -220,8 +220,7 @@ class DominionSCBackfillRemainingSensor(CoordinatorEntity[DominionSCCoordinator]
         super().__init__(coordinator)
         self._attr_name = "Backfill Cycles Remaining"
         self._attr_unique_id = f"{entry.entry_id}_backfill_cycles_remaining"
-        # unit is a simple count of cycles
-        self._attr_native_unit_of_measurement = "cycles"
+        # unit is a simple count of cycles (no unit_of_measurement for counts)
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name="Dominion SC Energy",
@@ -233,18 +232,8 @@ class DominionSCBackfillRemainingSensor(CoordinatorEntity[DominionSCCoordinator]
     @property
     def native_value(self) -> int | None:
         """Return count of incomplete (missing) backfill cycles or None if unavailable."""
-        summary = getattr(self.coordinator, "backfill_summary", None)
-        if summary is not None:
-            return len(summary.get("incomplete_cycles", []))
-        # Fallback for older coordinator without backfill_summary
-        backfill = getattr(self.coordinator, "backfill", None)
-        if not backfill:
-            return None
-        missing = backfill.get("missing_cycles")
-        if isinstance(missing, list):
-            return max(0, len(missing))
-        return None
-
+        summary = self.coordinator.backfill_summary
+        return len(summary.get("incomplete_cycles", [])) if summary is not None else None
 
 class DominionSCCurrentBillingCycleSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
     """Current billing cycle formatted as 'MMM D - MMM D' (e.g., 'Mar 9 - Apr 4')."""
@@ -381,7 +370,7 @@ class DominionSCBillDueDateSensor(CoordinatorEntity[DominionSCCoordinator], Sens
 
     @property
     def native_value(self) -> str | None:
-        acct = self.coordinator._state.get("account_summary", {})
+        acct = self.coordinator.account_summary
         raw = acct.get("raw_data", {}) or {}
         due = acct.get("due_date") or raw.get("account", {}).get("dueDate")
         parsed = _parse_due_date(due)
@@ -413,7 +402,7 @@ class DominionSCLastPaymentSensor(CoordinatorEntity[DominionSCCoordinator], Sens
 
     @property
     def native_value(self) -> float | None:
-        acct = self.coordinator._state.get("account_summary", {})
+        acct = self.coordinator.account_summary
         val = acct.get("last_payment_amount")
         parsed = _parse_money(val)
         return round(parsed, 2) if parsed is not None else None
@@ -444,7 +433,7 @@ class DominionSCAccountBalanceSensor(CoordinatorEntity[DominionSCCoordinator], S
 
     @property
     def native_value(self) -> float | None:
-        acct = self.coordinator._state.get("account_summary", {})
+        acct = self.coordinator.account_summary
         val = acct.get("account_balance")
         parsed = _parse_money(val)
         return round(parsed, 2) if parsed is not None else None
@@ -475,7 +464,7 @@ class DominionSCCurrentCostSensor(CoordinatorEntity[DominionSCCoordinator], Sens
 
     @property
     def native_value(self) -> float | None:
-        proj = self.coordinator._state.get("bill_projection", {}) or {}
+        proj = self.coordinator.bill_projection or {}
         val = proj.get("currentPrice")
         return round(float(val), 2) if val is not None else None
 
@@ -491,7 +480,7 @@ class DominionSCProjectedPriceSensor(DominionSCCurrentCostSensor):
 
     @property
     def native_value(self) -> float | None:
-        proj = self.coordinator._state.get("bill_projection", {}) or {}
+        proj = self.coordinator.bill_projection or {}
         val = proj.get("projectionPrice")
         return round(float(val), 2) if val is not None else None
 
@@ -515,7 +504,7 @@ class DominionSCDaysLeftSensor(CoordinatorEntity[DominionSCCoordinator], SensorE
 
     @property
     def native_value(self) -> int | None:
-        proj = self.coordinator._state.get("bill_projection", {}) or {}
+        proj = self.coordinator.bill_projection or {}
         val = proj.get("daysLeft")
         return int(val) if val is not None else None
 
@@ -543,7 +532,7 @@ class DominionSCElectricChargesSensor(CoordinatorEntity[DominionSCCoordinator], 
 
     @property
     def native_value(self) -> float | None:
-        summary = self.coordinator._state.get("current_bill_summary", {}) or {}
+        summary = self.coordinator.current_bill_summary or {}
         val = summary.get("electric_total") or summary.get("electric_total_amount")
         return round(float(val), 2) if val is not None else None
 
@@ -559,7 +548,7 @@ class DominionSCGasChargesSensor(DominionSCElectricChargesSensor):
 
     @property
     def native_value(self) -> float | None:
-        summary = self.coordinator._state.get("current_bill_summary", {}) or {}
+        summary = self.coordinator.current_bill_summary or {}
         val = summary.get("gas_total")
         return round(float(val), 2) if val is not None else None
 
@@ -574,7 +563,7 @@ class DominionSCElectricOtherChargesSensor(DominionSCElectricChargesSensor):
 
     @property
     def native_value(self) -> float | None:
-        summary = self.coordinator._state.get("current_bill_summary", {}) or {}
+        summary = self.coordinator.current_bill_summary or {}
         val = summary.get("electric_other_charges")
         return round(float(val), 2) if val is not None else None
 
@@ -589,7 +578,7 @@ class DominionSCGasOtherChargesSensor(DominionSCElectricOtherChargesSensor):
 
     @property
     def native_value(self) -> float | None:
-        summary = self.coordinator._state.get("current_bill_summary", {}) or {}
+        summary = self.coordinator.current_bill_summary or {}
         val = summary.get("gas_other_charges")
         return round(float(val), 2) if val is not None else None
 
@@ -604,6 +593,6 @@ class DominionSCTotalChargesSensor(DominionSCElectricChargesSensor):
 
     @property
     def native_value(self) -> float | None:
-        summary = self.coordinator._state.get("current_bill_summary", {}) or {}
+        summary = self.coordinator.current_bill_summary or {}
         val = summary.get("total_bill_amount") or summary.get("total_usage_charges")
         return round(float(val), 2) if val is not None else None

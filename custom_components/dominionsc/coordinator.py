@@ -87,6 +87,30 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         return self._state["backfill"]
 
     @property
+    def account_summary(self) -> dict[str, Any]:
+        """Return the latest fetched account/billing payload.
+
+        This value is populated during updates and may be an empty dict
+        if no data has been fetched yet.
+        """
+        return self._state.get("account_summary", {}) or {}
+
+    @property
+    def bill_projection(self) -> dict[str, Any]:
+        """Return the latest fetched bill projection payload."""
+        return self._state.get("bill_projection", {}) or {}
+
+    @property
+    def current_bill_summary(self) -> dict[str, Any]:
+        """Return the latest summarized current bill payload (bill_summary)."""
+        return self._state.get("current_bill_summary", {}) or {}
+
+    @property
+    def current_daily_usage(self) -> dict[str, Any]:
+        """Return the latest fetched current daily usage payload."""
+        return self._state.get("current_daily_usage", {}) or {}
+
+    @property
     def backfill_cycles_target(self) -> int:
         """Return the currently configured backfill cycles target."""
         return int(

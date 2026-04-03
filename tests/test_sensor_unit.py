@@ -41,6 +41,23 @@ class DummyCoordinator:
         # allow setting current_billing_cycle in tests
         self.current_billing_cycle = None
 
+    # Provide properties matching the real coordinator API used by sensors
+    @property
+    def account_summary(self):
+        return self._state.get("account_summary", {}) or {}
+
+    @property
+    def bill_projection(self):
+        return self._state.get("bill_projection", {}) or {}
+
+    @property
+    def current_bill_summary(self):
+        return self._state.get("current_bill_summary", {}) or {}
+
+    @property
+    def current_daily_usage(self):
+        return self._state.get("current_daily_usage", {}) or {}
+
 
 def test_format_cycle_label_with_pipe():
     key = "2026-03-01|2026-03-31"
