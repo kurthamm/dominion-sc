@@ -58,4 +58,12 @@
       }
     }
   }
+  ,
+  "entity": {
+    "sensor": {
+      "dominion_sc_energy_backfill_cycles_remaining": {
+        "name": "Backfill Cycles Remaining"
+      }
+    }
+  }
 }

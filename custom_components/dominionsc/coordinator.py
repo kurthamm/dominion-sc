@@ -189,6 +189,8 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             await self._ensure_authenticated()
             await self._process_intervals(datetime.now())
             await self._daily_reconcile(datetime.now().date())
+            # Process at most one missing backfill cycle per scheduled update
+            await self._process_backfill(overwrite=False)
             await self._sync_external_statistics(force_rewrite=False)
             self._apply_monotonic_guard()
             # Update last_sync timestamp for scheduled/automatic update
@@ -197,7 +199,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             return dict(self.totals)
         except Exception as err:  # pylint: disable=broad-except
             raise UpdateFailed(str(err)) from err
-            raise UpdateFailed(str(err)) from err
+
     async def _clear_external_statistics(self) -> None:
         """Clear custom external dominionsc statistics IDs for this config entry."""
         try:
@@ -875,6 +877,15 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         for key in (TOTAL_ELECTRIC_KWH, TOTAL_GAS_FT3, TOTAL_ELECTRIC_COST, TOTAL_GAS_COST):
             totals[key] = max(float(totals[key]), float(last.get(key, 0.0)))
             last[key] = float(totals[key])
+
+    def _set_last_sync(self) -> None:
+        """Set the last_sync timestamp in persistent state to now (ISO 8601)."""
+        try:
+            # Prefer timezone-aware ISO format
+            self._state["last_sync"] = datetime.now().astimezone().isoformat()
+        except Exception:
+            # Fallback to naive ISO format
+            self._state["last_sync"] = datetime.now().isoformat()
 
     async def _save_state(self) -> None:
         await self._store.async_save(self._state)

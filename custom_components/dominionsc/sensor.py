@@ -104,6 +104,7 @@ async def async_setup_entry(
     entities.extend(
         [
             DominionSCBackfillCyclesSensor(coordinator, entry),
+            DominionSCBackfillRemainingSensor(coordinator, entry),
             DominionSCCurrentBillingCycleSensor(coordinator, entry),
             DominionSCLastSyncSensor(coordinator, entry),
         ]
@@ -188,6 +189,47 @@ class DominionSCBackfillCyclesSensor(CoordinatorEntity[DominionSCCoordinator], S
             "completed_cycles": completed_labels,
             "incomplete_cycles": incomplete_labels,
         }
+
+
+class DominionSCBackfillRemainingSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
+    """Sensor exposing the number of backfill cycles remaining (incomplete_count).
+
+    This sensor's state is an integer count so it appears directly on the
+    integration's device overview page.
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:counter"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Backfill Cycles Remaining"
+        self._attr_unique_id = f"{entry.entry_id}_backfill_cycles_remaining"
+        # unit is a simple count of cycles
+        self._attr_native_unit_of_measurement = "cycles"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dominion SC Energy",
+            manufacturer="Dominion Energy South Carolina",
+            model="Utility Account",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """Return count of incomplete (missing) backfill cycles or None if unavailable."""
+        backfill = getattr(self.coordinator, "backfill", None)
+        if not backfill:
+            return None
+        missing = backfill.get("missing_cycles")
+        if isinstance(missing, list):
+            return max(0, len(missing))
+        # Fallback: try to compute from other attributes
+        incomplete = backfill.get("incomplete_count")
+        if isinstance(incomplete, int):
+            return max(0, incomplete)
+        return None
 
 
 class DominionSCCurrentBillingCycleSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
