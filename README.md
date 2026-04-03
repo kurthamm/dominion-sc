@@ -93,6 +93,26 @@ After setup, the integration creates a **Dominion SC Energy** device with the fo
 | Run Backfill | Triggers one backfill cycle (append mode) |
 | Cleanup External Statistics | Clears legacy external statistics and force-rewrites all historical data |
 
+### Account & Billing Informational Sensors
+
+These additional informational sensors expose account and billing details (useful in dashboards or automations). They are created on the same `Dominion SC Energy` device and are diagnostic/monetary where appropriate.
+
+| Entity | Unit / Type | Description |
+|--------|------------:|-------------|
+| Bill Due Date | date (ISO) | Due date for the current bill, parsed to a date when available |
+| Last Payment | $ | Most recent payment amount (USD) |
+| Account Balance | $ | Current account balance; textual values like `Bill Paid` are reported as `$0.00` |
+| Current Cost | $ | Current accumulated cost for billing period (from projection API) |
+| Projected Price | $ | Projected total price for the current billing period |
+| Days Left | integer | Days remaining in the billing cycle (from projection API) |
+| Electric Charges | $ | Electric charge subtotal for the current billing period (daily bill summary) |
+| Gas Charges | $ | Gas charge subtotal for the current billing period (daily bill summary) |
+| Electric Other Charges | $ | Other electric charges (fees, taxes) in the current bill summary |
+| Gas Other Charges | $ | Other gas charges in the current bill summary |
+| Total Charges | $ | Combined total bill amount (from daily bill summary) |
+
+These sensors read Dominion's `account_summary`, `bill_projection`, and `current_daily_usage` payloads and perform lightweight parsing (money strings like `$333.19`, and dates such as `Mar 9, 2026`). The integration treats textual `Bill Paid` values as `$0.00` to keep monetary sensors numeric for dashboards and automations.
+
 ## Energy Dashboard Configuration
 
 1. Go to **Settings → Dashboards → Energy**.

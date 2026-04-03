@@ -153,8 +153,31 @@ Energy Dashboard-facing usage sensors use `total_increasing` (consumption) or `t
 4. Gas cumulative cost total (`$`, `total`, `device_class=MONETARY`)
 
 ### Diagnostic Sensors
-5. Backfill Cycles (total count as state; attributes: `completed_count`, `incomplete_count`, `completed_cycles` list as `YYYY-MMM`, `incomplete_cycles` list as `YYYY-MMM`)
+5. Backfill Cycles (configured target as state; attributes: `completed_count` of all-time successfully backfilled cycles, `incomplete_count` of eligible cycles not yet completed, `completed_cycles` persistent list as `YYYY-MMM`, `incomplete_cycles` eligible-but-not-yet-completed list as `YYYY-MMM`)
 6. Current Billing Cycle (formatted as `MMM D - MMM D`, e.g. `Mar 9 - Apr 4`; attributes: `start` and `end` raw ISO dates)
+
+### Account & Billing Informational Sensors
+These sensors expose account and billing metadata useful for dashboards and automations. They are diagnostic/monetary sensors backed by the coordinator's persisted state and read from Dominion/Bidgely payloads.
+
+7. Bill Status (string) — source: `account_summary.raw_data.account.accountStatus` or `account_summary.account_balance` textual fallback.
+8. Bill Due Date (date) — source: `account_summary.due_date` or `account_summary.raw_data.account.dueDate`. Parse common formats like `Mar 9, 2026` and ISO `YYYY-MM-DD`.
+9. Last Payment (monetary, $) — source: `account_summary.last_payment_amount` (strings like `$333.19` parsed to numeric 333.19).
+10. Account Balance (monetary, $) — source: `account_summary.account_balance`. Treat textual `Bill Paid` (case-insensitive) as numeric `0.0`.
+11. Current Cost (monetary, $) — source: `bill_projection.currentPrice`.
+12. Projected Price (monetary, $) — source: `bill_projection.projectionPrice`.
+13. Days Left (integer) — source: `bill_projection.daysLeft`.
+14. Electric Charges (monetary, $) — source: `current_daily_usage.bill_summary.electric_total` (or `electricTotalAmount` in raw payload).
+15. Gas Charges (monetary, $) — source: `current_daily_usage.bill_summary.gas_total`.
+16. Electric Other Charges (monetary, $) — source: `current_daily_usage.bill_summary.electric_other_charges`.
+17. Gas Other Charges (monetary, $) — source: `current_daily_usage.bill_summary.gas_other_charges`.
+18. Total Charges (monetary, $) — source: `current_daily_usage.bill_summary.total_bill_amount`.
+
+Parsing & state rules for contributors
+- Store fetched payloads in the coordinator persistent state keys: `account_summary`, `bill_projection`, `current_daily_usage`, and `current_bill_summary` (a convenience alias for `current_daily_usage.bill_summary`).
+- Fetch these payloads during the coordinator update loop using `hass.async_add_executor_job(...)` since the client is blocking.
+- Parse money strings by stripping `$` and commas; accept numeric values as-is. Treat `Bill Paid` and similar textual indications of a zero balance as `0.0` for monetary sensors.
+- Parse due dates from `MMM D, YYYY` (e.g., `Mar 9, 2026`) and ISO `YYYY-MM-DD`; return `None` if unparseable.
+- Keep these informational sensors separate from the cumulative/statistics sensors; they do not affect ledger or recorder import logic.
 
 ### Button Entities
 7. Run Backfill — calls `dominionsc.run_backfill` service
