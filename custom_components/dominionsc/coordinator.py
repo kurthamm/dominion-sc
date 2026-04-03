@@ -182,6 +182,19 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             start = _try_parse(sd) if sd else None
             end = _try_parse(ed) if ed else None
 
+        # Debug: log what we found in bill_projection
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            try:
+                _LOGGER.debug(
+                    "Billing cycle source: bill_projection sd=%s ed=%s parsed_start=%s parsed_end=%s",
+                    bp.get("billStartDateFormatted") or bp.get("billStartDate"),
+                    bp.get("billEndDateFormatted") or bp.get("billEndDate"),
+                    start.isoformat() if start else None,
+                    end.isoformat() if end else None,
+                )
+            except Exception:
+                _LOGGER.debug("Billing cycle source: bill_projection present but could not log values")
+
         # Fallback: current_daily_usage payload
         if (not start or not end):
             cd = self._state.get("current_daily_usage") or {}
@@ -192,7 +205,25 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             if not end and ed:
                 end = _try_parse(ed)
 
+        # Debug: log what we found in current_daily_usage
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            try:
+                _LOGGER.debug(
+                    "Billing cycle source: current_daily_usage sd=%s ed=%s parsed_start=%s parsed_end=%s",
+                    cd.get("billStartDateFormatted") or cd.get("billStartDate"),
+                    cd.get("billEndDateFormatted") or cd.get("billEndDate"),
+                    start.isoformat() if start else None,
+                    end.isoformat() if end else None,
+                )
+            except Exception:
+                _LOGGER.debug("Billing cycle source: current_daily_usage present but could not log values")
+
         if start and end:
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug(
+                    "Resolved current billing cycle: start=%s end=%s",
+                    start.isoformat(), end.isoformat(),
+                )
             return BillingCycle(start=start, end=end)
 
         # Final fallback: month start to today
@@ -770,14 +801,23 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         return False
 
     async def _daily_reconcile(self, now_date: date) -> None:
+        # Historically this routine fetched only a short lookback window.
+        # Change: scheduled reconciles should fetch the entire current billing
+        # cycle so the integration gets all days for the active cycle.
+        # The `current_billing_cycle` prefers `bill_projection`/`current_daily_usage`.
         lookback = int(
             self.config_entry.options.get(
                 CONF_DAILY_LOOKBACK_DAYS,
                 self.config_entry.data.get(CONF_DAILY_LOOKBACK_DAYS, DEFAULT_DAILY_LOOKBACK_DAYS),
             )
         )
-        start = now_date - timedelta(days=max(1, lookback))
-        end = now_date - timedelta(days=1)
+        cycle = self.current_billing_cycle
+        start = cycle.start
+        end = cycle.end
+        _LOGGER.debug(
+            "Daily reconcile using billing cycle: start=%s end=%s (configured lookback=%s days)",
+            start.isoformat(), end.isoformat(), lookback,
+        )
         rows = await self._fetch_daily_rows(start, end)
 
         for row in rows:
@@ -862,11 +902,19 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
     async def _fetch_daily_rows(self, start: date, end: date) -> list[dict[str, float | str]]:
         start_dt = datetime.combine(start, time.min, tzinfo=UTC)
         end_dt = datetime.combine(end, time.max, tzinfo=UTC)
+        # If the requested end date is in the past (strictly before today) we
+        # are asking for a completed billing period / historical data. In that
+        # case request the "previous"/completed cycle from Bidgely by setting
+        # current_cycle=False (which maps to skip_ongoing_cycle=True). For any
+        # request that includes today or a future date, keep current_cycle=True
+        # so the ongoing active cycle is returned.
+        today = datetime.now().date()
+        current_cycle_flag = False if end < today else True
 
         electric_payload = await self.hass.async_add_executor_job(
             lambda: self._client.get_daily_usage(
                 measurement_type="ELECTRIC",
-                current_cycle=True,
+                current_cycle=current_cycle_flag,
                 start=start_dt,
                 end=end_dt,
                 locale="en_US",
@@ -875,12 +923,29 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         gas_payload = await self.hass.async_add_executor_job(
             lambda: self._client.get_daily_usage(
                 measurement_type="GAS",
-                current_cycle=True,
+                current_cycle=current_cycle_flag,
                 start=start_dt,
                 end=end_dt,
                 locale="en_US",
             )
         )
+
+        # Temporary debug logging: show whether we requested the current
+        # cycle or the completed (previous) cycle and how many usage rows
+        # were returned for each fuel. This helps diagnose empty backfill
+        # payloads when running historical imports.
+        try:
+            e_rows = (electric_payload.get("payload") or {}).get("usageChartDataList") or [] if isinstance(electric_payload, dict) else []
+            g_rows = (gas_payload.get("payload") or {}).get("usageChartDataList") or [] if isinstance(gas_payload, dict) else []
+            _LOGGER.debug(
+                "Backfill fetch debug: start=%s end=%s current_cycle=%s electric_rows=%d gas_rows=%d",
+                start.isoformat(), end.isoformat(), current_cycle_flag, len(e_rows), len(g_rows),
+            )
+        except Exception:  # Defensive: logging must not break processing
+            _LOGGER.debug(
+                "Backfill fetch debug: start=%s end=%s current_cycle=%s (could not compute row counts)",
+                start.isoformat(), end.isoformat(), current_cycle_flag,
+            )
         return self._merge_usage_rows(
             electric_rows=self._parse_usage_rows(electric_payload, fuel="electric"),
             gas_rows=self._parse_usage_rows(gas_payload, fuel="gas"),
