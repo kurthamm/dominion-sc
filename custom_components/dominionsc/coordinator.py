@@ -87,7 +87,115 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         return self._state["backfill"]
 
     @property
+    def account_summary(self) -> dict[str, Any]:
+        """Return the latest fetched account/billing payload.
+
+        This value is populated during updates and may be an empty dict
+        if no data has been fetched yet.
+        """
+        return self._state.get("account_summary", {}) or {}
+
+    @property
+    def bill_projection(self) -> dict[str, Any]:
+        """Return the latest fetched bill projection payload."""
+        return self._state.get("bill_projection", {}) or {}
+
+    @property
+    def current_bill_summary(self) -> dict[str, Any]:
+        """Return the latest summarized current bill payload (bill_summary)."""
+        return self._state.get("current_bill_summary", {}) or {}
+
+    @property
+    def current_daily_usage(self) -> dict[str, Any]:
+        """Return the latest fetched current daily usage payload."""
+        return self._state.get("current_daily_usage", {}) or {}
+
+    @property
+    def backfill_cycles_target(self) -> int:
+        """Return the currently configured backfill cycles target."""
+        return int(
+            self.config_entry.options.get(
+                CONF_BACKFILL_CYCLES_TARGET,
+                self.config_entry.data.get(CONF_BACKFILL_CYCLES_TARGET, DEFAULT_BACKFILL_CYCLES_TARGET),
+            )
+        )
+
+    @property
+    def backfill_summary(self) -> dict[str, Any]:
+        """Compute a consistent backfill summary based on current target.
+
+        Returns a dict with:
+        - target: configured backfill cycles target
+        - eligible_keys: cycle keys eligible for the current target
+        - completed_cycles: all-time completed cycle keys (persistent)
+        - completed_in_scope: completed cycles that are in the current eligible set
+        - incomplete_cycles: eligible cycles that are NOT yet completed
+        """
+        target = self.backfill_cycles_target
+        eligible = self._build_recent_monthly_cycles(
+            now_date=datetime.now().date(), target=target
+        )
+        eligible_keys = [c.key for c in eligible]
+        all_completed = set(self.backfill.get("completed_cycles", []))
+
+        completed_in_scope = [k for k in eligible_keys if k in all_completed]
+        incomplete = [k for k in eligible_keys if k not in all_completed]
+
+        return {
+            "target": target,
+            "eligible_keys": eligible_keys,
+            "completed_cycles": sorted(all_completed),
+            "completed_in_scope": completed_in_scope,
+            "incomplete_cycles": incomplete,
+        }
+
+    @property
     def current_billing_cycle(self) -> BillingCycle:
+        """Return current billing cycle using fetched projection/current payloads.
+
+        Prefer `bill_projection.billStartDateFormatted` / `billEndDateFormatted` (ISO)
+        or `billStartDate` / `billEndDate` (human) when available. Fall back to
+        current_daily_usage fields, then to month-start -> today.
+        """
+        bp = self._state.get("bill_projection") or {}
+        start = None
+        end = None
+
+        def _try_parse(s: str) -> date | None:
+            if not s:
+                return None
+            # Try ISO first
+            try:
+                return date.fromisoformat(s)
+            except Exception:
+                pass
+            # Try common human-readable format like 'Mar 9, 2026'
+            try:
+                return datetime.strptime(s, "%b %d, %Y").date()
+            except Exception:
+                return None
+
+        # Try bill_projection first
+        if isinstance(bp, dict):
+            sd = bp.get("billStartDateFormatted") or bp.get("billStartDate")
+            ed = bp.get("billEndDateFormatted") or bp.get("billEndDate")
+            start = _try_parse(sd) if sd else None
+            end = _try_parse(ed) if ed else None
+
+        # Fallback: current_daily_usage payload
+        if (not start or not end):
+            cd = self._state.get("current_daily_usage") or {}
+            sd = cd.get("billStartDateFormatted") or cd.get("billStartDate")
+            ed = cd.get("billEndDateFormatted") or cd.get("billEndDate")
+            if not start and sd:
+                start = _try_parse(sd)
+            if not end and ed:
+                end = _try_parse(ed)
+
+        if start and end:
+            return BillingCycle(start=start, end=end)
+
+        # Final fallback: month start to today
         now = datetime.now().date()
         start = date(now.year, now.month, 1)
         return BillingCycle(start=start, end=now)
@@ -187,8 +295,31 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
     async def _async_update_data(self) -> dict[str, float]:
         try:
             await self._ensure_authenticated()
+            # Fetch account and billing data used by informational sensors.
+            # Use the executor because the client uses blocking requests.
+            try:
+                account_summary = await self.hass.async_add_executor_job(self._client.get_account_summary)
+                self._state["account_summary"] = account_summary
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.warning("Could not fetch account_summary: %s", err)
+
+            try:
+                current_daily = await self.hass.async_add_executor_job(self._client.get_current_daily_usage)
+                # store entire current_daily payload and the summarized bill_summary
+                self._state["current_daily_usage"] = current_daily
+                self._state["current_bill_summary"] = current_daily.get("bill_summary", {})
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.warning("Could not fetch current_daily_usage: %s", err)
+
+            try:
+                bill_projection = await self.hass.async_add_executor_job(self._client.get_bill_projection)
+                self._state["bill_projection"] = bill_projection
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.warning("Could not fetch bill_projection: %s", err)
             await self._process_intervals(datetime.now())
             await self._daily_reconcile(datetime.now().date())
+            # Process at most one missing backfill cycle per scheduled update
+            await self._process_backfill(overwrite=False)
             await self._sync_external_statistics(force_rewrite=False)
             self._apply_monotonic_guard()
             # Update last_sync timestamp for scheduled/automatic update
@@ -197,13 +328,13 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             return dict(self.totals)
         except Exception as err:  # pylint: disable=broad-except
             raise UpdateFailed(str(err)) from err
-            raise UpdateFailed(str(err)) from err
+
     async def _clear_external_statistics(self) -> None:
         """Clear custom external dominionsc statistics IDs for this config entry."""
         try:
             from homeassistant.components.recorder import get_instance  # pylint: disable=import-outside-toplevel
         except Exception as err:  # pylint: disable=broad-except
-            _LOGGER.debug("Recorder unavailable while clearing external stats: %s", err)
+            _LOGGER.warning("Recorder unavailable while clearing external stats: %s", err)
             return
 
         statistic_ids = [
@@ -219,7 +350,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
 
         recorder = get_instance(self.hass)
         recorder.async_clear_statistics(statistic_ids)
-        _LOGGER.debug("Cleared external statistic IDs: %s", statistic_ids)
+        _LOGGER.info("Cleared external statistic IDs: %s", statistic_ids)
 
     def get_statistic_id(self, total_key: str) -> str | None:
         """Return recorder statistic_id (sensor entity based) used by Energy Dashboard."""
@@ -262,7 +393,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 async_import_statistics,
             )
         except Exception as err:  # pylint: disable=broad-except
-            _LOGGER.debug("Recorder statistics import unavailable: %s", err)
+            _LOGGER.warning("Recorder statistics import unavailable: %s", err)
             return
 
         statistics_state = self._state.setdefault("statistics_import", {"electric": [], "gas": []})
@@ -374,7 +505,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                     )
                     if has_older_new_day:
                         rewrite_for_fuel = True
-                        _LOGGER.debug(
+                        _LOGGER.info(
                             "Statistics sync forcing rewrite for %s due to newly discovered older days",
                             series_key,
                         )
@@ -385,7 +516,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 # NOTE: Despite the async-style name, this is not an awaitable coroutine
                 # in current HA recorder API. Do not add `await` here.
                 recorder.async_clear_statistics([statistic_id])
-                _LOGGER.debug("Cleared existing statistics for %s", statistic_id)
+                _LOGGER.info("Cleared existing statistics for %s", statistic_id)
 
             for day, consumption in daily_points:
                 running_sum += consumption
@@ -457,7 +588,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             new_data = dict(self.config_entry.data)
             new_data[CONF_TFA_TOKEN] = refreshed_token
             self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
-            _LOGGER.debug("Updated stored tfa token for entry=%s", self.config_entry.entry_id)
+            _LOGGER.info("Updated stored tfa token for entry=%s", self.config_entry.entry_id)
 
     async def _process_intervals(self, now_dt: datetime) -> None:
         start = now_dt - timedelta(hours=2)
@@ -680,7 +811,7 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
 
         rows = await self._fetch_daily_rows(cycle.start, cycle.end)
         if not rows:
-            _LOGGER.debug("Backfill cycle %s returned no rows", cycle.key)
+            _LOGGER.warning("Backfill cycle %s returned no rows — check API or payload availability", cycle.key)
             return
 
         today = datetime.now().date()
@@ -808,7 +939,17 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             )
         )
         cycles = self._build_recent_monthly_cycles(now_date=datetime.now().date(), target=target)
-        backfill["missing_cycles"] = [cycle.key for cycle in cycles]
+        eligible_keys = [cycle.key for cycle in cycles]
+        completed = set(backfill.get("completed_cycles", []))
+
+        # Only add cycles that haven't already been completed
+        backfill["missing_cycles"] = [k for k in eligible_keys if k not in completed]
+        _LOGGER.debug(
+            "Initialized backfill cycles: eligible=%d completed=%d missing=%d",
+            len(eligible_keys),
+            len(completed),
+            len(backfill["missing_cycles"]),
+        )
 
     @staticmethod
     def _build_recent_monthly_cycles(now_date: date, target: int) -> list[BillingCycle]:
@@ -876,6 +1017,15 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             totals[key] = max(float(totals[key]), float(last.get(key, 0.0)))
             last[key] = float(totals[key])
 
+    def _set_last_sync(self) -> None:
+        """Set the last_sync timestamp in persistent state to now (ISO 8601)."""
+        try:
+            # Prefer timezone-aware ISO format
+            self._state["last_sync"] = datetime.now().astimezone().isoformat()
+        except Exception:
+            # Fallback to naive ISO format
+            self._state["last_sync"] = datetime.now().isoformat()
+
     async def _save_state(self) -> None:
         await self._store.async_save(self._state)
 
@@ -913,6 +1063,11 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             # ISO 8601 timestamp of the last successful sync/update
             "last_sync": None,
             "statistics_rewrite_once_done": False,
+            # Latest fetched account/billing payloads (for informational sensors)
+            "account_summary": {},
+            "bill_projection": {},
+            "current_daily_usage": {},
+            "current_bill_summary": {},
         }
 
     def _merge_state(self, stored: dict[str, Any]) -> dict[str, Any]:

@@ -44,7 +44,7 @@ def _format_cycle_label(cycle_key: str) -> str:
         dt = datetime.fromisoformat(date_str)
         return dt.strftime("%Y-%b")  # e.g., "2026-Jan"
     except (ValueError, TypeError, IndexError):
-        _LOGGER.debug("Could not parse cycle key '%s', using raw value", cycle_key)
+        _LOGGER.warning("Could not parse cycle key '%s', using raw value", cycle_key)
         return str(cycle_key)
 
 
@@ -104,8 +104,25 @@ async def async_setup_entry(
     entities.extend(
         [
             DominionSCBackfillCyclesSensor(coordinator, entry),
+            DominionSCBackfillRemainingSensor(coordinator, entry),
             DominionSCCurrentBillingCycleSensor(coordinator, entry),
             DominionSCLastSyncSensor(coordinator, entry),
+        ]
+    )
+    # informational account/billing sensors
+    entities.extend(
+        [
+            DominionSCBillDueDateSensor(coordinator, entry),
+            DominionSCLastPaymentSensor(coordinator, entry),
+            DominionSCAccountBalanceSensor(coordinator, entry),
+            DominionSCCurrentCostSensor(coordinator, entry),
+            DominionSCProjectedPriceSensor(coordinator, entry),
+            DominionSCDaysLeftSensor(coordinator, entry),
+            DominionSCElectricChargesSensor(coordinator, entry),
+            DominionSCGasChargesSensor(coordinator, entry),
+            DominionSCElectricOtherChargesSensor(coordinator, entry),
+            DominionSCGasOtherChargesSensor(coordinator, entry),
+            DominionSCTotalChargesSensor(coordinator, entry),
         ]
     )
     async_add_entities(entities)
@@ -144,8 +161,13 @@ class DominionSCTotalSensor(CoordinatorEntity[DominionSCCoordinator], SensorEnti
 class DominionSCBackfillCyclesSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
     """Total backfill cycle count with completed/incomplete detail in attributes.
 
-    State = total number of backfill cycles (completed + incomplete).
-    Attributes expose the full cycle lists formatted as YYYY-MMM.
+    State = newly configured backfill cycles target.
+    Attributes:
+      - completed_count: number of cycles that have been successfully backfilled
+        (across all time, including before and after configure/reconfigure).
+      - completed_cycles: persistent list of all completed cycle labels (YYYY-MMM).
+      - incomplete_count: number of eligible cycles not yet completed.
+      - incomplete_cycles: eligible cycles that are not in completed_cycles.
     """
 
     _attr_has_entity_name = True
@@ -165,30 +187,53 @@ class DominionSCBackfillCyclesSensor(CoordinatorEntity[DominionSCCoordinator], S
         )
 
     @property
-    def _backfill(self) -> dict[str, Any]:
-        return self.coordinator.backfill
-
-    @property
     def native_value(self) -> int:
-        """Return total number of backfill cycles (completed + incomplete)."""
-        completed = self._backfill.get("completed_cycles", [])
-        missing = self._backfill.get("missing_cycles", [])
-        return len(completed) + len(missing)
+        """Return the configured backfill cycles target value."""
+        return self.coordinator.backfill_cycles_target
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return completed/incomplete counts and cycle lists as YYYY-MMM."""
-        raw_completed = self._backfill.get("completed_cycles", [])
-        raw_missing = self._backfill.get("missing_cycles", [])
-        completed_labels = [_format_cycle_label(c) for c in raw_completed]
-        incomplete_labels = [_format_cycle_label(c) for c in raw_missing]
+        summary = self.coordinator.backfill_summary
+        completed_labels = [_format_cycle_label(c) for c in summary["completed_cycles"]]
+        incomplete_labels = [_format_cycle_label(c) for c in summary["incomplete_cycles"]]
         return {
-            "completed_count": len(completed_labels),
-            "incomplete_count": len(incomplete_labels),
+            "completed_count": len(summary["completed_cycles"]),
+            "incomplete_count": len(summary["incomplete_cycles"]),
             "completed_cycles": completed_labels,
             "incomplete_cycles": incomplete_labels,
         }
 
+
+class DominionSCBackfillRemainingSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
+    """Sensor exposing the number of backfill cycles remaining (incomplete_count).
+
+    This sensor's state is an integer count so it appears directly on the
+    integration's device overview page.
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:counter"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Backfill Cycles Remaining"
+        self._attr_unique_id = f"{entry.entry_id}_backfill_cycles_remaining"
+        # unit is a simple count of cycles (no unit_of_measurement for counts)
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dominion SC Energy",
+            manufacturer="Dominion Energy South Carolina",
+            model="Utility Account",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        """Return count of incomplete (missing) backfill cycles or None if unavailable."""
+        summary = self.coordinator.backfill_summary
+        return len(summary.get("incomplete_cycles", [])) if summary is not None else None
 
 class DominionSCCurrentBillingCycleSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
     """Current billing cycle formatted as 'MMM D - MMM D' (e.g., 'Mar 9 - Apr 4')."""
@@ -252,3 +297,302 @@ class DominionSCLastSyncSensor(CoordinatorEntity[DominionSCCoordinator], SensorE
         """Return ISO 8601 timestamp of last successful sync, or None."""
         # Coordinator stores the last_sync as ISO8601 string (or None)
         return datetime.fromisoformat(self.coordinator.last_sync) if self.coordinator.last_sync else None
+
+
+# --------------------------- Informational sensors ------------------------
+
+
+def _parse_money(value: str | float | None) -> float | None:
+    """Parse a money string like "$123.45" or pass-through numeric values.
+
+    Returns a float or None if the input is empty/unparseable.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        s = str(value).strip()
+        if not s:
+            return None
+        # textual indicators of zero/paid
+        if any(term in s.lower() for term in ("paid", "bill paid")):
+            return 0.0
+        s = s.replace("$", "").replace(",", "")
+        return float(s)
+    except Exception:
+        _LOGGER.warning("Could not parse money value: %s", value)
+        return None
+
+
+def _parse_due_date(value: str | None) -> date | None:
+    """Try to parse a due date expressed as common strings.
+
+    Accepts formats like 'Mar 9, 2026' or '2026-03-09'. Returns a date or None.
+    """
+    if not value:
+        return None
+    s = str(value).strip()
+    # Try ISO first
+    try:
+        return date.fromisoformat(s)
+    except Exception:
+        pass
+    try:
+        return datetime.strptime(s, "%b %d, %Y").date()
+    except Exception:
+        pass
+    _LOGGER.warning("Could not parse due date: %s", s)
+    return None
+
+
+
+
+
+class DominionSCBillDueDateSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
+    """Bill due date (date only)."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:calendar"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Bill Due Date"
+        self._attr_unique_id = f"{entry.entry_id}_bill_due_date"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dominion SC Energy",
+            manufacturer="Dominion Energy South Carolina",
+            model="Utility Account",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        acct = self.coordinator.account_summary
+        raw = acct.get("raw_data", {}) or {}
+        due = acct.get("due_date") or raw.get("account", {}).get("dueDate")
+        parsed = _parse_due_date(due)
+        return parsed.isoformat() if parsed else None
+
+
+class DominionSCLastPaymentSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
+    """Last payment amount (monetary)."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:currency-usd"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = CURRENCY_DOLLAR
+    _attr_state_class = SensorStateClass.TOTAL
+    # Display exactly two decimal places in the UI
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Last Payment"
+        self._attr_unique_id = f"{entry.entry_id}_last_payment"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dominion SC Energy",
+            manufacturer="Dominion Energy South Carolina",
+            model="Utility Account",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        acct = self.coordinator.account_summary
+        val = acct.get("last_payment_amount")
+        parsed = _parse_money(val)
+        return round(parsed, 2) if parsed is not None else None
+
+
+class DominionSCAccountBalanceSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
+    """Account balance (monetary). Treat 'Bill Paid' as $0.00."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:wallet"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = CURRENCY_DOLLAR
+    _attr_state_class = SensorStateClass.TOTAL
+    # Display exactly two decimal places in the UI
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Account Balance"
+        self._attr_unique_id = f"{entry.entry_id}_account_balance"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dominion SC Energy",
+            manufacturer="Dominion Energy South Carolina",
+            model="Utility Account",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        acct = self.coordinator.account_summary
+        val = acct.get("account_balance")
+        parsed = _parse_money(val)
+        return round(parsed, 2) if parsed is not None else None
+
+
+class DominionSCCurrentCostSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
+    """Current cost from bill projection (monetary)."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:currency-usd"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_native_unit_of_measurement = CURRENCY_DOLLAR
+    # Display exactly two decimal places in the UI
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Current Cost"
+        self._attr_unique_id = f"{entry.entry_id}_current_cost"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dominion SC Energy",
+            manufacturer="Dominion Energy South Carolina",
+            model="Utility Account",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        proj = self.coordinator.bill_projection or {}
+        val = proj.get("currentPrice")
+        return round(float(val), 2) if val is not None else None
+
+
+class DominionSCProjectedPriceSensor(DominionSCCurrentCostSensor):
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_name = "Projected Price"
+        self._attr_unique_id = f"{entry.entry_id}_projected_price"
+
+    # ensure display precision is preserved for projected price as well
+    _attr_suggested_display_precision = 2
+
+    @property
+    def native_value(self) -> float | None:
+        proj = self.coordinator.bill_projection or {}
+        val = proj.get("projectionPrice")
+        return round(float(val), 2) if val is not None else None
+
+
+class DominionSCDaysLeftSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:calendar-clock"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Days Left"
+        self._attr_unique_id = f"{entry.entry_id}_days_left"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dominion SC Energy",
+            manufacturer="Dominion Energy South Carolina",
+            model="Utility Account",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        proj = self.coordinator.bill_projection or {}
+        val = proj.get("daysLeft")
+        return int(val) if val is not None else None
+
+
+class DominionSCElectricChargesSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:flash"
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_native_unit_of_measurement = CURRENCY_DOLLAR
+    _attr_state_class = SensorStateClass.TOTAL
+    # Display exactly two decimal places in the UI
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Electric Charges"
+        self._attr_unique_id = f"{entry.entry_id}_electric_charges"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dominion SC Energy",
+            manufacturer="Dominion Energy South Carolina",
+            model="Utility Account",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        summary = self.coordinator.current_bill_summary or {}
+        val = summary.get("electric_total") or summary.get("electric_total_amount")
+        return round(float(val), 2) if val is not None else None
+
+
+class DominionSCGasChargesSensor(DominionSCElectricChargesSensor):
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_name = "Gas Charges"
+        self._attr_unique_id = f"{entry.entry_id}_gas_charges"
+
+    # inherit suggested precision from parent, but set explicitly for clarity
+    _attr_suggested_display_precision = 2
+
+    @property
+    def native_value(self) -> float | None:
+        summary = self.coordinator.current_bill_summary or {}
+        val = summary.get("gas_total")
+        return round(float(val), 2) if val is not None else None
+
+
+class DominionSCElectricOtherChargesSensor(DominionSCElectricChargesSensor):
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_name = "Electric Other Charges"
+        self._attr_unique_id = f"{entry.entry_id}_electric_other_charges"
+
+    _attr_suggested_display_precision = 2
+
+    @property
+    def native_value(self) -> float | None:
+        summary = self.coordinator.current_bill_summary or {}
+        val = summary.get("electric_other_charges")
+        return round(float(val), 2) if val is not None else None
+
+
+class DominionSCGasOtherChargesSensor(DominionSCElectricOtherChargesSensor):
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_name = "Gas Other Charges"
+        self._attr_unique_id = f"{entry.entry_id}_gas_other_charges"
+
+    _attr_suggested_display_precision = 2
+
+    @property
+    def native_value(self) -> float | None:
+        summary = self.coordinator.current_bill_summary or {}
+        val = summary.get("gas_other_charges")
+        return round(float(val), 2) if val is not None else None
+
+
+class DominionSCTotalChargesSensor(DominionSCElectricChargesSensor):
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_name = "Total Charges"
+        self._attr_unique_id = f"{entry.entry_id}_total_charges"
+
+    _attr_suggested_display_precision = 2
+
+    @property
+    def native_value(self) -> float | None:
+        summary = self.coordinator.current_bill_summary or {}
+        val = summary.get("total_bill_amount") or summary.get("total_usage_charges")
+        return round(float(val), 2) if val is not None else None

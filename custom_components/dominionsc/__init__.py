@@ -135,7 +135,7 @@ async def _async_options_updated(hass, entry) -> None:
     )
     new_interval = timedelta(minutes=max(1, new_poll_minutes))
     if coordinator.update_interval != new_interval:
-        _LOGGER.debug(
+        _LOGGER.info(
             "Poll interval changed: %s -> %s", coordinator.update_interval, new_interval
         )
         coordinator.update_interval = new_interval
