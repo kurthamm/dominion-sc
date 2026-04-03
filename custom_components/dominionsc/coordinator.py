@@ -476,6 +476,12 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 continue
 
             daily_points.sort(key=lambda item: item[0])
+            # Build a set of available day strings from the ledger points so
+            # we can detect when previously imported days are missing from
+            # the current ledger. If any previously imported day is not
+            # present, force a rewrite to avoid importing a smaller
+            # cumulative sequence (which would create negative deltas).
+            point_day_set = {d.isoformat() for d, _ in daily_points}
             running_sum = 0.0
             to_import: list[StatisticData] = []
 
@@ -509,6 +515,17 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                             "Statistics sync forcing rewrite for %s due to newly discovered older days",
                             series_key,
                         )
+                # If any previously imported day is missing from the ledger
+                # we must force a rewrite. This can happen after state restore
+                # / reboot if the ledger was changed or filtered differently
+                # and helps avoid importing cumulative values that are lower
+                # than what was previously written to recorder.
+                if any(day_key not in point_day_set for day_key in imported_days):
+                    rewrite_for_fuel = True
+                    _LOGGER.info(
+                        "Statistics sync forcing rewrite for %s because previously imported days are missing from ledger",
+                        series_key,
+                    )
 
             if rewrite_for_fuel:
                 imported_days.clear()
