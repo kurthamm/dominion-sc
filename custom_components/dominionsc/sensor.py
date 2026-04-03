@@ -396,6 +396,8 @@ class DominionSCLastPaymentSensor(CoordinatorEntity[DominionSCCoordinator], Sens
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_native_unit_of_measurement = CURRENCY_DOLLAR
     _attr_state_class = SensorStateClass.TOTAL
+    # Display exactly two decimal places in the UI
+    _attr_suggested_display_precision = 2
 
     def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -425,6 +427,8 @@ class DominionSCAccountBalanceSensor(CoordinatorEntity[DominionSCCoordinator], S
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_native_unit_of_measurement = CURRENCY_DOLLAR
     _attr_state_class = SensorStateClass.TOTAL
+    # Display exactly two decimal places in the UI
+    _attr_suggested_display_precision = 2
 
     def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -454,6 +458,8 @@ class DominionSCCurrentCostSensor(CoordinatorEntity[DominionSCCoordinator], Sens
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_state_class = SensorStateClass.TOTAL
     _attr_native_unit_of_measurement = CURRENCY_DOLLAR
+    # Display exactly two decimal places in the UI
+    _attr_suggested_display_precision = 2
 
     def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -479,6 +485,9 @@ class DominionSCProjectedPriceSensor(DominionSCCurrentCostSensor):
         super().__init__(coordinator, entry)
         self._attr_name = "Projected Price"
         self._attr_unique_id = f"{entry.entry_id}_projected_price"
+
+    # ensure display precision is preserved for projected price as well
+    _attr_suggested_display_precision = 2
 
     @property
     def native_value(self) -> float | None:
@@ -517,6 +526,8 @@ class DominionSCElectricChargesSensor(CoordinatorEntity[DominionSCCoordinator], 
     _attr_device_class = SensorDeviceClass.MONETARY
     _attr_native_unit_of_measurement = CURRENCY_DOLLAR
     _attr_state_class = SensorStateClass.TOTAL
+    # Display exactly two decimal places in the UI
+    _attr_suggested_display_precision = 2
 
     def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -543,6 +554,9 @@ class DominionSCGasChargesSensor(DominionSCElectricChargesSensor):
         self._attr_name = "Gas Charges"
         self._attr_unique_id = f"{entry.entry_id}_gas_charges"
 
+    # inherit suggested precision from parent, but set explicitly for clarity
+    _attr_suggested_display_precision = 2
+
     @property
     def native_value(self) -> float | None:
         summary = self.coordinator._state.get("current_bill_summary", {}) or {}
@@ -555,6 +569,8 @@ class DominionSCElectricOtherChargesSensor(DominionSCElectricChargesSensor):
         super().__init__(coordinator, entry)
         self._attr_name = "Electric Other Charges"
         self._attr_unique_id = f"{entry.entry_id}_electric_other_charges"
+
+    _attr_suggested_display_precision = 2
 
     @property
     def native_value(self) -> float | None:
@@ -569,6 +585,8 @@ class DominionSCGasOtherChargesSensor(DominionSCElectricOtherChargesSensor):
         self._attr_name = "Gas Other Charges"
         self._attr_unique_id = f"{entry.entry_id}_gas_other_charges"
 
+    _attr_suggested_display_precision = 2
+
     @property
     def native_value(self) -> float | None:
         summary = self.coordinator._state.get("current_bill_summary", {}) or {}
@@ -581,6 +599,8 @@ class DominionSCTotalChargesSensor(DominionSCElectricChargesSensor):
         super().__init__(coordinator, entry)
         self._attr_name = "Total Charges"
         self._attr_unique_id = f"{entry.entry_id}_total_charges"
+
+    _attr_suggested_display_precision = 2
 
     @property
     def native_value(self) -> float | None:

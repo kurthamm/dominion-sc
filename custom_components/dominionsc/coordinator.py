@@ -279,9 +279,9 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         if not statistic_ids:
             return
 
-    recorder = get_instance(self.hass)
-    recorder.async_clear_statistics(statistic_ids)
-    _LOGGER.info("Cleared external statistic IDs: %s", statistic_ids)
+        recorder = get_instance(self.hass)
+        recorder.async_clear_statistics(statistic_ids)
+        _LOGGER.info("Cleared external statistic IDs: %s", statistic_ids)
 
     def get_statistic_id(self, total_key: str) -> str | None:
         """Return recorder statistic_id (sensor entity based) used by Energy Dashboard."""
