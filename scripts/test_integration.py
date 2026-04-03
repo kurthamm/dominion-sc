@@ -323,6 +323,20 @@ class IntegrationRunner:
         rows = self._fetch_daily_rows(start, end)
 
         for row in rows:
+            # Skip recent rows with zero values within lookback window to avoid incomplete data
+            row_date = date.fromisoformat(row["date"])
+            lookback_cutoff = now_date - timedelta(days=lookback_days)
+            e_kwh = float(row.get("electric_usage_kwh", 0) or 0)
+            g_ccf = float(row.get("gas_usage_ccf", 0) or 0)
+            e_cost = float(row.get("electric_cost", 0) or 0)
+            g_cost = float(row.get("gas_cost", 0) or 0)
+            
+            # If row date is within lookback window and any value is zero, skip it
+            if row_date >= lookback_cutoff:
+                if e_kwh == 0.0 or g_ccf == 0.0 or e_cost == 0.0 or g_cost == 0.0:
+                    print(f"[daily] skipping recent zero row: {row['date']}")
+                    continue
+            
             day_key = row["date"]
             self._upsert_daily(
                 f"electric|{day_key}",

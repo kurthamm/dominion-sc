@@ -530,10 +530,13 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
 
         Filtering rules:
         - Today and future dates: always skip (data is never available yet).
-        - Recent dates (within lookback window): skip if BOTH consumption AND
+        - Recent dates (within lookback window): skip if ALL consumption AND
           cost are null/zero — Dominion data may arrive later via lag-safe
           reconciliation.  Rows with real data for one fuel but zero for the
           other are kept.
+        - If a date falls within the lookback window, skip zero values for that date
+          regardless of whether all values are zero or not (to avoid importing
+          potentially incomplete data).
         - Finalized dates (backfill): trust zero gas (legitimate in summer)
           and zero cost; skip zero electric consumption (true zero essentially
           impossible — HA itself draws power).
@@ -587,6 +590,15 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                     row["date"],
                 )
                 return True
+            # Skip zero values for dates within lookback window (even if not all-zero)
+            # to avoid importing potentially incomplete data
+            if row_date >= lookback_cutoff:
+                if e_kwh == 0.0 or g_ccf == 0.0 or e_cost == 0.0 or g_cost == 0.0:
+                    _LOGGER.debug(
+                        "Skipping recent zero row (may be incomplete data): %s",
+                        row["date"],
+                    )
+                    return True
         else:
             # Backfill / finalized data: trust zero for gas and cost,
             # but skip if ALL values are zero (likely a data gap in API)
