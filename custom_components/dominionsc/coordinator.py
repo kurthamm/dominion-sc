@@ -127,6 +127,51 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
 
     @property
     def current_billing_cycle(self) -> BillingCycle:
+        """Return current billing cycle using fetched projection/current payloads.
+
+        Prefer `bill_projection.billStartDateFormatted` / `billEndDateFormatted` (ISO)
+        or `billStartDate` / `billEndDate` (human) when available. Fall back to
+        current_daily_usage fields, then to month-start -> today.
+        """
+        bp = self._state.get("bill_projection") or {}
+        start = None
+        end = None
+
+        def _try_parse(s: str) -> date | None:
+            if not s:
+                return None
+            # Try ISO first
+            try:
+                return date.fromisoformat(s)
+            except Exception:
+                pass
+            # Try common human-readable format like 'Mar 9, 2026'
+            try:
+                return datetime.strptime(s, "%b %d, %Y").date()
+            except Exception:
+                return None
+
+        # Try bill_projection first
+        if isinstance(bp, dict):
+            sd = bp.get("billStartDateFormatted") or bp.get("billStartDate") or bp.get("billStartDateFormatted")
+            ed = bp.get("billEndDateFormatted") or bp.get("billEndDate") or bp.get("billEndDateFormatted")
+            start = _try_parse(sd) if sd else None
+            end = _try_parse(ed) if ed else None
+
+        # Fallback: current_daily_usage payload
+        if (not start or not end):
+            cd = self._state.get("current_daily_usage") or {}
+            sd = cd.get("billStartDateFormatted") or cd.get("billStartDate")
+            ed = cd.get("billEndDateFormatted") or cd.get("billEndDate")
+            if not start and sd:
+                start = _try_parse(sd)
+            if not end and ed:
+                end = _try_parse(ed)
+
+        if start and end:
+            return BillingCycle(start=start, end=end)
+
+        # Final fallback: month start to today
         now = datetime.now().date()
         start = date(now.year, now.month, 1)
         return BillingCycle(start=start, end=now)
