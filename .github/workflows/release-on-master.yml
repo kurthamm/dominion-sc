@@ -55,8 +55,15 @@ jobs:
           VERSION="${DATE}.${PADDED}"
           echo "Computed version: $VERSION"
 
-          # Build a helpful release body: commits and merged PRs (if any)
-          COMMITS=$(git --no-pager log -n 20 --pretty=format:'- %h %s (%an)' HEAD)
+          # Get the latest tag to determine what commits to include in changelog
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LATEST_TAG" ]; then
+            # Show commits since last tag
+            COMMITS=$(git --no-pager log --pretty=format:'- %h %s (%an)' "$LATEST_TAG"..HEAD)
+          else
+            # If no tags exist, show recent commits
+            COMMITS=$(git --no-pager log -n 20 --pretty=format:'- %h %s (%an)' HEAD)
+          fi
 
           # Look for merged PR numbers in recent commit messages
           PRS=$(git --no-pager log -n 50 --pretty=%B | grep -oE 'Merge pull request #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)
@@ -72,7 +79,7 @@ jobs:
           Version: ${VERSION}
           Commit: ${REPO_URL}/commit/${GITHUB_SHA}
 
-          Changelog (latest commits):
+          Changelog (since last release):
           ${COMMITS}
 
           EOF
