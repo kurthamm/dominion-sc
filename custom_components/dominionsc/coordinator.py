@@ -153,8 +153,8 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
 
         # Try bill_projection first
         if isinstance(bp, dict):
-            sd = bp.get("billStartDateFormatted") or bp.get("billStartDate") or bp.get("billStartDateFormatted")
-            ed = bp.get("billEndDateFormatted") or bp.get("billEndDate") or bp.get("billEndDateFormatted")
+            sd = bp.get("billStartDateFormatted") or bp.get("billStartDate")
+            ed = bp.get("billEndDateFormatted") or bp.get("billEndDate")
             start = _try_parse(sd) if sd else None
             end = _try_parse(ed) if ed else None
 

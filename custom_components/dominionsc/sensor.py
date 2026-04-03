@@ -492,7 +492,7 @@ class DominionSCProjectedPriceSensor(DominionSCCurrentCostSensor):
     @property
     def native_value(self) -> float | None:
         proj = self.coordinator._state.get("bill_projection", {}) or {}
-        val = proj.get("projectionPrice") or proj.get("projectionPrice")
+        val = proj.get("projectionPrice")
         return round(float(val), 2) if val is not None else None
 
 
@@ -544,7 +544,7 @@ class DominionSCElectricChargesSensor(CoordinatorEntity[DominionSCCoordinator], 
     @property
     def native_value(self) -> float | None:
         summary = self.coordinator._state.get("current_bill_summary", {}) or {}
-        val = summary.get("electric_total") or summary.get("electric_total_amount") or summary.get("electric_total")
+        val = summary.get("electric_total") or summary.get("electric_total_amount")
         return round(float(val), 2) if val is not None else None
 
 
