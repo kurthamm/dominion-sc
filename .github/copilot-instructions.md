@@ -210,6 +210,18 @@ Parsing & state rules for contributors
   - Monotonic totals and final summary assertions
 - Uses `DOMINIONSC_TEST_BACKFILL_CYCLES_TARGET` (number of most recent billing cycles to backfill).
 
+### HA DB query helper
+
+- For quick validation or debugging of recorder statistics, use the included helper script `scripts/query_ha_stats.py`.
+- The script inspects `ha_config/home-assistant_v2.db`, prints `statistics_meta` entries for the Dominion series, shows recent rows, and performs a monotonicity check on the full series.
+- Run it from the repo root inside the project's virtualenv. Example (PowerShell):
+
+```powershell
+$env:PYTHONPATH = '.'; & '.\.venv\Scripts\Activate.ps1'; python .\scripts\query_ha_stats.py
+```
+
+Add any additional checks you need to the script (deltas, CSV export, ledger comparisons) rather than inventing new one-off DB queries in PRs.
+
 ## Coding Conventions
 - Keep changes minimal and focused.
 - Preserve existing project style where possible.
