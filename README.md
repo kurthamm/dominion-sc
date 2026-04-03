@@ -17,6 +17,16 @@ A custom Home Assistant integration for **Dominion Energy South Carolina** that 
 - **Persistent state** — survives restarts without data loss or double-counting
 - **Manual backfill & statistics rewrite** — UI buttons and services for on-demand control
 
+## Important updates (2026-04-03)
+
+- Default SSL verification is now enabled. The integration will verify HTTPS certificates by default (the `verify_ssl` option defaults to `true` for new installs). If you previously disabled certificate verification, reconfigure the integration to re-enable it for that entry.
+- The following settings can now be configured during the initial setup (and during reconfigure):
+   - Poll interval (minutes)
+   - Backfill cycles target
+   - Daily lookback days
+
+For existing Home Assistant entries, change these values via **Settings → Devices & Services → Dominion SC Energy → Reconfigure** or via the **Configure** (Options) dialog.
+
 ## Requirements
 
 - Home Assistant **2026.4.0** or later

@@ -66,6 +66,19 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_USERNAME: user_input[CONF_USERNAME],
                 CONF_PASSWORD: user_input[CONF_PASSWORD],
                 CONF_VERIFY_SSL: user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+                CONF_POLL_MINUTES: int(
+                    user_input.get(CONF_POLL_MINUTES, DEFAULT_POLL_MINUTES)
+                ),
+                CONF_BACKFILL_CYCLES_TARGET: int(
+                    user_input.get(
+                        CONF_BACKFILL_CYCLES_TARGET, DEFAULT_BACKFILL_CYCLES_TARGET
+                    )
+                ),
+                CONF_DAILY_LOOKBACK_DAYS: int(
+                    user_input.get(
+                        CONF_DAILY_LOOKBACK_DAYS, DEFAULT_DAILY_LOOKBACK_DAYS
+                    )
+                ),
             }
 
             self._client = DominionSCClient(verify_ssl=self._user_data[CONF_VERIFY_SSL])
@@ -107,11 +120,24 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         default_username = ""
         default_password = ""
         default_verify_ssl = DEFAULT_VERIFY_SSL
+        default_poll_minutes = DEFAULT_POLL_MINUTES
+        default_backfill = DEFAULT_BACKFILL_CYCLES_TARGET
+        default_lookback_days = DEFAULT_DAILY_LOOKBACK_DAYS
         if self._is_reconfigure and self._reconfig_entry:
             default_username = self._reconfig_entry.data.get(CONF_USERNAME, "")
             default_password = self._reconfig_entry.data.get(CONF_PASSWORD, "")
             default_verify_ssl = self._reconfig_entry.data.get(
                 CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL
+            )
+            # Backwards-compat: numeric settings may be stored in data or options
+            default_poll_minutes = self._reconfig_entry.options.get(
+                CONF_POLL_MINUTES, self._reconfig_entry.data.get(CONF_POLL_MINUTES, DEFAULT_POLL_MINUTES)
+            )
+            default_backfill = self._reconfig_entry.options.get(
+                CONF_BACKFILL_CYCLES_TARGET, self._reconfig_entry.data.get(CONF_BACKFILL_CYCLES_TARGET, DEFAULT_BACKFILL_CYCLES_TARGET)
+            )
+            default_lookback_days = self._reconfig_entry.options.get(
+                CONF_DAILY_LOOKBACK_DAYS, self._reconfig_entry.data.get(CONF_DAILY_LOOKBACK_DAYS, DEFAULT_DAILY_LOOKBACK_DAYS)
             )
 
         schema = vol.Schema(
@@ -119,6 +145,42 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_USERNAME, default=default_username): str,
                 vol.Required(CONF_PASSWORD, default=default_password): str,
                 vol.Optional(CONF_VERIFY_SSL, default=default_verify_ssl): bool,
+                vol.Optional(
+                    CONF_POLL_MINUTES,
+                    default=default_poll_minutes,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=5,
+                        max=1440,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="minutes",
+                    )
+                ),
+                vol.Optional(
+                    CONF_BACKFILL_CYCLES_TARGET,
+                    default=default_backfill,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=0,
+                        max=24,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="cycles",
+                    )
+                ),
+                vol.Optional(
+                    CONF_DAILY_LOOKBACK_DAYS,
+                    default=default_lookback_days,
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=1,
+                        max=30,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="days",
+                    )
+                ),
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)

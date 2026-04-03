@@ -105,6 +105,7 @@ async def async_setup_entry(
         [
             DominionSCBackfillCyclesSensor(coordinator, entry),
             DominionSCCurrentBillingCycleSensor(coordinator, entry),
+            DominionSCLastSyncSensor(coordinator, entry),
         ]
     )
     async_add_entities(entities)
@@ -148,7 +149,7 @@ class DominionSCBackfillCyclesSensor(CoordinatorEntity[DominionSCCoordinator], S
     """
 
     _attr_has_entity_name = True
-    _attr_icon = "mdi:calendar-sync"
+    _attr_icon = "mdi:pound"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
@@ -224,3 +225,30 @@ class DominionSCCurrentBillingCycleSensor(CoordinatorEntity[DominionSCCoordinato
             "start": cycle.start.isoformat() if cycle else None,
             "end": cycle.end.isoformat() if cycle else None,
         }
+
+
+class DominionSCLastSyncSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
+    """Sensor exposing the last successful sync time for the integration."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:calendar-sync"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator: DominionSCCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_name = "Last Sync"
+        self._attr_unique_id = f"{entry.entry_id}_last_sync"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="Dominion SC Energy",
+            manufacturer="Dominion Energy South Carolina",
+            model="Utility Account",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Return ISO 8601 timestamp of last successful sync, or None."""
+        # Coordinator stores the last_sync as ISO8601 string (or None)
+        return datetime.fromisoformat(self.coordinator.last_sync) if self.coordinator.last_sync else None

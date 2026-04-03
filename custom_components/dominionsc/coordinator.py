@@ -92,6 +92,11 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         start = date(now.year, now.month, 1)
         return BillingCycle(start=start, end=now)
 
+    @property
+    def last_sync(self) -> str | None:
+        """Return ISO 8601 timestamp string for last successful sync, or None."""
+        return self._state.get("last_sync")
+
     async def async_run_backfill(
         self,
         overwrite: bool = False,
@@ -114,6 +119,8 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         )
         await self._sync_external_statistics(force_rewrite=overwrite)
         self._apply_monotonic_guard()
+        # Update last_sync because a manual backfill is a successful sync operation
+        self._set_last_sync()
         await self._save_state()
         self.async_set_updated_data(dict(self.totals))
         _LOGGER.debug("Manual backfill finished: entry=%s totals=%s", self.config_entry.entry_id, self.totals)
@@ -123,6 +130,8 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         _LOGGER.debug("Manual statistics rewrite requested: entry=%s", self.config_entry.entry_id)
         await self._clear_external_statistics()
         await self._sync_external_statistics(force_rewrite=True)
+        # Update last_sync because rewriting statistics is an intentional sync operation
+        self._set_last_sync()
         await self._save_state()
         self.async_set_updated_data(dict(self.totals))
         _LOGGER.debug("Manual statistics rewrite finished: entry=%s", self.config_entry.entry_id)
@@ -180,14 +189,15 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             await self._ensure_authenticated()
             await self._process_intervals(datetime.now())
             await self._daily_reconcile(datetime.now().date())
-            await self._process_backfill(overwrite=False)
             await self._sync_external_statistics(force_rewrite=False)
             self._apply_monotonic_guard()
+            # Update last_sync timestamp for scheduled/automatic update
+            self._set_last_sync()
             await self._save_state()
             return dict(self.totals)
         except Exception as err:  # pylint: disable=broad-except
             raise UpdateFailed(str(err)) from err
-
+            raise UpdateFailed(str(err)) from err
     async def _clear_external_statistics(self) -> None:
         """Clear custom external dominionsc statistics IDs for this config entry."""
         try:
@@ -900,6 +910,8 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                 "electric": [],
                 "gas": [],
             },
+            # ISO 8601 timestamp of the last successful sync/update
+            "last_sync": None,
             "statistics_rewrite_once_done": False,
         }
 
