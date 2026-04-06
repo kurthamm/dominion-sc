@@ -112,6 +112,14 @@ class StoreStub:
 
 setattr(storage_mod, "Store", StoreStub)
 
+# Minimal restore_state submodule used by some entities
+restore_state_mod = types.ModuleType("homeassistant.helpers.restore_state")
+class RestoreEntity:
+    def __init__(self, *args, **kwargs):
+        pass
+
+setattr(restore_state_mod, "RestoreEntity", RestoreEntity)
+
 # Attach helper submodules to ha
 ha.helpers = types.ModuleType("homeassistant.helpers")
 ha.helpers.device_registry = device_registry_mod
@@ -119,6 +127,7 @@ ha.helpers.entity = entity_mod
 ha.helpers.entity_platform = entity_platform_mod
 ha.helpers.update_coordinator = update_coordinator_mod
 ha.helpers.storage = storage_mod
+ha.helpers.restore_state = restore_state_mod
 
 # Register modules in sys.modules so normal imports find them
 sys.modules["homeassistant"] = ha
@@ -133,6 +142,7 @@ sys.modules["homeassistant.helpers.entity"] = entity_mod
 sys.modules["homeassistant.helpers.entity_platform"] = entity_platform_mod
 sys.modules["homeassistant.helpers.update_coordinator"] = update_coordinator_mod
 sys.modules["homeassistant.helpers.storage"] = storage_mod
+sys.modules["homeassistant.helpers.restore_state"] = restore_state_mod
 
 # Do not stub external third-party packages (requests, bs4) here; prefer
 # installing them into the test venv so real implementations are used.
