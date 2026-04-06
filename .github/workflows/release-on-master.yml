@@ -1,20 +1,23 @@
 name: Release on master
 
+# Trigger this workflow only after the CI workflow completes. This ensures the
+# release job runs only when CI has finished successfully for the same branch.
 on:
-  push:
-    branches:
-      - master
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 
 permissions:
   contents: write
 
 jobs:
   release:
-    # avoid running when the job itself pushed a commit with [skip ci]
-    # For push events: skip if head commit message contains [skip ci].
-    # For workflow_dispatch or other events, proceed.
-    if: "!(github.event_name == 'push' && contains(github.event.head_commit.message, '[skip ci]'))"
+    # Only run when the triggering CI workflow completed successfully and the
+    # run was for the master branch. This prevents releases when CI fails.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'master' &&
+      contains(github.event.workflow_run.head_commit.message, '[skip ci]') == false }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
