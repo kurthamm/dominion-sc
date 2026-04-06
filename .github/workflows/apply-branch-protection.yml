@@ -34,7 +34,11 @@ jobs:
     steps:
       - name: Apply branch protection via GitHub API
         uses: actions/github-script@v6
+        # Authenticate with an admin Personal Access Token (PAT) stored in
+        # the repository secret ADMIN_TOKEN. The automatically-provided
+        # GITHUB_TOKEN often lacks permission to modify branch protection.
         with:
+          github-token: ${{ secrets.ADMIN_TOKEN }}
           script: |
             const branch = core.getInput('branch') || 'master'
             const contextsRaw = core.getInput('contexts') || 'CI'
@@ -76,4 +80,5 @@ jobs:
 
             core.info('Branch protection applied successfully')
         env:
+          # Keep GITHUB_TOKEN in env for any other calls if needed
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
