@@ -113,9 +113,11 @@ def test_is_future_placeholder_and_should_skip_daily_row_logic():
     row_recent_all_zero = {"date": recent_date, "electric_usage_kwh": 0, "gas_usage_ccf": 0, "electric_cost": 0, "gas_cost": 0}
     assert coord._should_skip_daily_row(row_recent_all_zero, today, is_backfill=False) is True
 
-    # Recent partial-zero within lookback -> also skipped per code
+    # Recent partial-zero within lookback -> row is NOT skipped at the row level.
+    # Per-fuel filtering happens at the individual _upsert_daily call sites
+    # in _daily_reconcile and _process_backfill.
     row_recent_partial = {"date": recent_date, "electric_usage_kwh": 1.0, "gas_usage_ccf": 0, "electric_cost": 1.0, "gas_cost": 0}
-    assert coord._should_skip_daily_row(row_recent_partial, today, is_backfill=False) is True
+    assert coord._should_skip_daily_row(row_recent_partial, today, is_backfill=False) is False
 
     # Backfill finalized row: all_zero -> skip
     past_date = (today - datetime.timedelta(days=30)).isoformat()

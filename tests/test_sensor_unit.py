@@ -58,6 +58,9 @@ class DummyCoordinator:
     def current_daily_usage(self):
         return self._state.get("current_daily_usage", {}) or {}
 
+    async def async_rewrite_statistics(self):
+        return None
+
 
 def test_format_cycle_label_with_pipe():
     key = "2026-03-01|2026-03-31"
@@ -98,6 +101,63 @@ def test_total_sensor_native_value_rounding():
     desc = sc_sensor.SENSORS[0]
     s = sc_sensor.DominionSCTotalSensor(coord, entry, desc)
     assert s.native_value == round(12.34567, 3)
+
+
+def test_total_sensor_apply_restored_native_value_raises_baseline():
+    coord = DummyCoordinator()
+    coord.totals[const.TOTAL_ELECTRIC_KWH] = 50.0
+    coord._state["last_totals"] = {const.TOTAL_ELECTRIC_KWH: 49.0}
+
+    entry = DummyEntry("abc123")
+    desc = sc_sensor.SENSORS[0]
+    s = sc_sensor.DominionSCTotalSensor(coord, entry, desc)
+
+    s._apply_restored_native_value(75.0)
+
+    assert coord.totals[const.TOTAL_ELECTRIC_KWH] == 75.0
+    assert coord._state["last_totals"][const.TOTAL_ELECTRIC_KWH] == 75.0
+
+
+def test_total_sensor_apply_restored_native_value_ignores_lower_value():
+    coord = DummyCoordinator()
+    coord.totals[const.TOTAL_ELECTRIC_KWH] = 80.0
+    coord._state["last_totals"] = {const.TOTAL_ELECTRIC_KWH: 80.0}
+
+    entry = DummyEntry("abc123")
+    desc = sc_sensor.SENSORS[0]
+    s = sc_sensor.DominionSCTotalSensor(coord, entry, desc)
+
+    s._apply_restored_native_value(70.0)
+
+    assert coord.totals[const.TOTAL_ELECTRIC_KWH] == 80.0
+    assert coord._state["last_totals"][const.TOTAL_ELECTRIC_KWH] == 80.0
+
+
+def test_total_sensor_apply_restored_native_value_schedules_one_time_rewrite():
+    coord = DummyCoordinator()
+    coord.totals[const.TOTAL_ELECTRIC_KWH] = 50.0
+    coord._state["last_totals"] = {const.TOTAL_ELECTRIC_KWH: 49.0}
+
+    class HassStub:
+        def __init__(self):
+            self.tasks = []
+
+        def async_create_task(self, coro):
+            self.tasks.append(coro)
+            # close to avoid un-awaited coroutine warnings in tests
+            coro.close()
+
+    coord.hass = HassStub()
+
+    entry = DummyEntry("abc123")
+    desc = sc_sensor.SENSORS[0]
+    s = sc_sensor.DominionSCTotalSensor(coord, entry, desc)
+
+    s._apply_restored_native_value(75.0)
+    s._apply_restored_native_value(76.0)
+
+    assert len(coord.hass.tasks) == 1
+    assert getattr(coord, "_startup_statistics_rewrite_scheduled", False) is True
 
 
 def test_backfill_cycles_sensor_attributes_and_value():

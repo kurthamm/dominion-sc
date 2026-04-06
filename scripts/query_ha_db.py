@@ -2,18 +2,84 @@
 import sqlite3
 import json
 import sys
+import re
 from datetime import datetime, timezone, timedelta
 
-DB_PATH = sys.argv[1] if len(sys.argv) > 1 else 'ha_config/home-assistant_v2.db'
-TARGET_DATE = '2026-04-01'
+
+import argparse
+
+# Defaults
+DB_PATH = 'ha_config/home-assistant_v2.db'
+# If --start-date not provided, default to today's date
+TARGET_DATE = datetime.now().date().isoformat()
+
+# Argparse: support explicit flags plus legacy positional args
+parser = argparse.ArgumentParser(
+    description='Query Home Assistant DB for dominionsc statistics (date in YYYY-MM-DD)'
+)
+parser.add_argument('--db', '-d', dest='db', help='Path to Home Assistant DB')
+parser.add_argument('--start-date', '-s', dest='start_date', help='Start date in YYYY-MM-DD')
+parser.add_argument('--end-date', '-e', dest='end_date', help='End date in YYYY-MM-DD (optional)')
+parser.add_argument('--quiet', '--quite', '-q', dest='quiet', action='store_true', help='Suppress verbose schema and per-entity output')
+parser.add_argument('--export-non-midnight', dest='export_non_midnight', action='store_true', help='Export non-midnight statistic starts for dominionsc to CSV in ha_config/')
+
+args = parser.parse_args()
+
+date_re = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+# Flags only — positional args removed. Use explicit flags for clarity.
+DB_PATH = args.db or DB_PATH
+TARGET_START = args.start_date or TARGET_DATE
+TARGET_END = args.end_date or None
+QUIET = bool(args.quiet)
+
+# Validate start date format strictly (YYYY-MM-DD)
+if not date_re.match(TARGET_START):
+    print(f"ERROR: --start-date must be in YYYY-MM-DD format (got: {TARGET_START})")
+    sys.exit(2)
+try:
+    # will raise on invalid dates like 2026-02-30
+    start_dt_candidate = datetime.strptime(TARGET_START, '%Y-%m-%d')
+except Exception as exc:
+    print(f"ERROR: --start-date is not a valid date: {TARGET_START} ({exc})")
+    sys.exit(2)
+
+# Validate optional end date
+if TARGET_END:
+    if not date_re.match(TARGET_END):
+        print(f"ERROR: --end-date must be in YYYY-MM-DD format (got: {TARGET_END})")
+        sys.exit(2)
+    try:
+        end_dt_candidate = datetime.strptime(TARGET_END, '%Y-%m-%d')
+    except Exception as exc:
+        print(f"ERROR: --end-date is not a valid date: {TARGET_END} ({exc})")
+        sys.exit(2)
+    # ensure end >= start
+    if end_dt_candidate < start_dt_candidate:
+        print(f"ERROR: --end-date ({TARGET_END}) is before --start-date ({TARGET_START})")
+        sys.exit(2)
+
+# Set final start/end datetime boundaries (end is exclusive)
+start_dt = datetime.fromisoformat(TARGET_START + 'T00:00:00')
+if TARGET_END:
+    # include the entire end day by adding one day to the end date
+    end_dt = datetime.fromisoformat(TARGET_END + 'T00:00:00') + timedelta(days=1)
+else:
+    end_dt = start_dt + timedelta(days=1)
+
+# Keep date label for printing
+if TARGET_END:
+    date_label = f"{TARGET_START} .. {TARGET_END}"
+else:
+    date_label = TARGET_START
+
 DAYS_BACK = 30
 DAYS_FORWARD = 7
 
 def ts(dt):
     return int(dt.replace(tzinfo=timezone.utc).timestamp())
 
-start_dt = datetime.fromisoformat(TARGET_DATE + 'T00:00:00')
-end_dt = start_dt + timedelta(days=1)
+# compute unix timestamps for the selected date range
 start_ts = ts(start_dt)
 end_ts = ts(end_dt)
 
@@ -29,9 +95,10 @@ con = sqlite3.connect(DB_PATH)
 con.row_factory = sqlite3.Row
 cur = con.cursor()
 
-print('\n--- sqlite_master tables (summary) ---')
-for r in cur.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name").fetchall():
-    print(dict(r))
+if not QUIET:
+    print('\n--- sqlite_master tables (summary) ---')
+    for r in cur.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ORDER BY name").fetchall():
+        print(dict(r))
 
 def print_schema(table):
     try:
@@ -41,12 +108,13 @@ def print_schema(table):
     except Exception as e:
         print(f"Could not inspect schema for {table}: {e}")
 
-print_schema('states')
-print_schema('statistics')
-print_schema('statistics_meta')
+if not QUIET:
+    print_schema('states')
+    print_schema('statistics')
+    print_schema('statistics_meta')
 
 print('Using DB:', DB_PATH)
-print('Target date:', TARGET_DATE)
+print('Date range:', date_label)
 print('Unix start/end (UTC):', start_ts, end_ts)
 print('\n--- statistics_meta rows matching dominionsc ---')
 cur.execute("SELECT statistic_id, unit_of_measurement, name FROM statistics_meta WHERE statistic_id LIKE '%dominionsc%' OR name LIKE '%dominionsc%'")
@@ -75,7 +143,7 @@ if not stat_ids:
     for m in likely_meta:
         print({'id': m['id'], 'statistic_id': m['statistic_id'], 'name': m['name'], 'unit': m['unit_of_measurement']})
 
-    print('\n--- statistics rows for 2026-04-01 by metadata_id ---')
+    print(f"\n--- statistics rows for {date_label} by metadata_id ---")
     for m in likely_meta:
         mid = m['id']
         cur.execute('SELECT * FROM statistics WHERE metadata_id=? AND start_ts>=? AND start_ts<? ORDER BY start_ts', (mid, start_ts, end_ts))
@@ -181,14 +249,15 @@ print('entity_ids with dominionsc in attributes:', rows2)
 all_candidates = list(dict.fromkeys(candidates + rows + rows2))
 print('\nCombined candidates to inspect:', all_candidates)
 
-for ent in all_candidates:
-    cur.execute('SELECT state, last_updated, last_changed, attributes FROM states WHERE entity_id=? AND last_updated>=? AND last_updated<? ORDER BY last_updated', (ent, start_dt.isoformat(), end_dt.isoformat()))
-    ent_rows = cur.fetchall()
-    print('\nEntity:', ent, ' rows:', len(ent_rows))
-    for e in ent_rows:
-        print({'state': e['state'], 'last_updated': e['last_updated'], 'last_changed': e['last_changed'], 'attributes_sample': (e['attributes'][:200] if e['attributes'] else None)})
+if not QUIET:
+    for ent in all_candidates:
+        cur.execute('SELECT state, last_updated, last_changed, attributes FROM states WHERE entity_id=? AND last_updated>=? AND last_updated<? ORDER BY last_updated', (ent, start_dt.isoformat(), end_dt.isoformat()))
+        ent_rows = cur.fetchall()
+        print('\nEntity:', ent, ' rows:', len(ent_rows))
+        for e in ent_rows:
+            print({'state': e['state'], 'last_updated': e['last_updated'], 'last_changed': e['last_changed'], 'attributes_sample': (e['attributes'][:200] if e['attributes'] else None)})
 
-print('\n--- smallest sums in statistics for 2026-04-01 (joined to meta) ---')
+print(f'\n--- smallest sums in statistics for {date_label} (joined to meta) ---')
 try:
     cur.execute('''
         SELECT sm.statistic_id, s.start_ts, s.sum, s.state
@@ -208,13 +277,13 @@ try:
 except Exception as e:
     print('Could not run joined statistics query:', e)
 
-print('\n--- states with negative-looking state strings on 2026-04-01 ---')
+print(f'\n--- states with negative-looking state strings on {date_label} ---')
 cur.execute("SELECT entity_id, state, last_updated FROM states WHERE last_updated>=? AND last_updated<? AND state LIKE '-%' ORDER BY last_updated", (start_dt.isoformat(), end_dt.isoformat()))
 neg_states = cur.fetchall()
 for n in neg_states:
     print({'entity_id': n['entity_id'], 'state': n['state'], 'last_updated': n['last_updated']})
 
-print('\n--- any series with negative sum on 2026-04-01 (joined to meta) ---')
+print(f'\n--- any series with negative sum on {date_label} (joined to meta) ---')
 try:
     cur.execute('''
         SELECT sm.statistic_id, s.start_ts, s.sum
@@ -262,3 +331,49 @@ except Exception as e:
 
 con.close()
 print('\nDone')
+
+if QUIET is False and args.export_non_midnight:
+    # If user asked for export, run a CSV export of all non-midnight starts
+    try:
+        import csv
+        import os
+        out = os.path.join('ha_config', 'dominionsc_non_midnight_stats.csv')
+        con = sqlite3.connect(DB_PATH)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        # find dominionsc meta ids
+        cur.execute("SELECT id, statistic_id FROM statistics_meta WHERE statistic_id LIKE '%dominionsc%'")
+        metas = cur.fetchall()
+        meta_map = {m['id']: m['statistic_id'] for m in metas}
+        if not meta_map:
+            print('No dominionsc metadata found for CSV export')
+        else:
+            placeholders = ','.join(['?'] * len(meta_map))
+            cur.execute(f"SELECT metadata_id, start_ts, start, state, sum FROM statistics WHERE metadata_id IN ({placeholders}) ORDER BY start_ts", tuple(meta_map.keys()))
+            srows = cur.fetchall()
+            rows = []
+            from datetime import datetime, timezone
+            for s in srows:
+                mid = s['metadata_id']
+                start_ts = s['start_ts']
+                start_str = s['start']
+                try:
+                    if start_ts is None:
+                        dt = datetime.fromisoformat(start_str)
+                    else:
+                        dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+                except Exception:
+                    continue
+                if not (dt.hour == 0 and dt.minute == 0 and dt.second == 0):
+                    rows.append((meta_map.get(mid, str(mid)), dt.isoformat(), int(start_ts) if start_ts is not None else None, float(s['state'] or 0.0), float(s['sum'] or 0.0)))
+            if rows:
+                with open(out, 'w', newline='', encoding='utf-8') as f:
+                    w = csv.writer(f)
+                    w.writerow(['statistic_id','start_iso','start_ts','state','sum'])
+                    w.writerows(rows)
+                print(f'Wrote {len(rows)} non-midnight rows to {out}')
+            else:
+                print('No non-midnight rows found for dominionsc')
+        con.close()
+    except Exception as exc:
+        print('Export failed:', exc)

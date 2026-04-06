@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, datetime
 from typing import Any
 
@@ -18,6 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -128,7 +130,11 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class DominionSCTotalSensor(CoordinatorEntity[DominionSCCoordinator], SensorEntity):
+class DominionSCTotalSensor(
+    CoordinatorEntity[DominionSCCoordinator],
+    RestoreEntity,
+    SensorEntity,
+):
     """Representation of a Dominion SC cumulative total sensor."""
 
     _attr_has_entity_name = True
@@ -152,6 +158,80 @@ class DominionSCTotalSensor(CoordinatorEntity[DominionSCCoordinator], SensorEnti
             model="Utility Account",
             entry_type=DeviceEntryType.SERVICE,
         )
+
+    async def async_added_to_hass(self) -> None:
+        """Restore previous state and clamp totals to monotonic baseline on reboot."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if not last_state or last_state.state in {None, "unknown", "unavailable"}:
+            return
+
+        try:
+            restored_value = float(last_state.state)
+        except (TypeError, ValueError):
+            _LOGGER.debug(
+                "Skipping restore for %s: non-numeric last state=%s",
+                self.entity_id,
+                last_state.state,
+            )
+            return
+
+        if not math.isfinite(restored_value) or restored_value < 0.0:
+            _LOGGER.debug(
+                "Skipping restore for %s: invalid restored value=%s",
+                self.entity_id,
+                restored_value,
+            )
+            return
+
+        self._apply_restored_native_value(restored_value)
+
+    def _apply_restored_native_value(self, restored_value: float) -> None:
+        """Apply restored value as lower-bound to preserve monotonic totals."""
+        current = float(self.coordinator.totals.get(self._key, 0.0))
+        if restored_value <= current:
+            return
+
+        self.coordinator.totals[self._key] = restored_value
+
+        # Keep coordinator last_totals in sync when available so subsequent
+        # refresh cycles continue monotonic progression.
+        state_obj = getattr(self.coordinator, "_state", None)
+        if isinstance(state_obj, dict):
+            last_totals = state_obj.get("last_totals")
+            if isinstance(last_totals, dict):
+                last_totals[self._key] = max(
+                    float(last_totals.get(self._key, 0.0)),
+                    restored_value,
+                )
+
+        _LOGGER.warning(
+            "Monotonic restore clamp applied for %s after startup: loaded_total=%.3f restored_state=%.3f",
+            self._key,
+            current,
+            restored_value,
+        )
+        self._schedule_startup_statistics_rewrite()
+
+    def _schedule_startup_statistics_rewrite(self) -> None:
+        """Schedule a one-time startup statistics rewrite after clamp detection.
+
+        If a reboot-time dip already produced bad recorder statistics for today,
+        rewriting historical statistics helps self-heal dashboard totals.
+        """
+        if bool(getattr(self.coordinator, "_startup_statistics_rewrite_scheduled", False)):
+            return
+
+        hass = getattr(self.coordinator, "hass", None)
+        if hass is None or not hasattr(hass, "async_create_task"):
+            return
+
+        setattr(self.coordinator, "_startup_statistics_rewrite_scheduled", True)
+        _LOGGER.warning(
+            "Scheduling one-time statistics rewrite after startup clamp for %s",
+            self._key,
+        )
+        hass.async_create_task(self.coordinator.async_rewrite_statistics())
 
     @property
     def native_value(self) -> float:

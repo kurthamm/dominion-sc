@@ -244,3 +244,31 @@ Add any additional checks you need to the script (deltas, CSV export, ledger com
 - If uncertain about endpoint semantics, add defensive validation and logs.
 - Prioritize correctness for Energy Dashboard statistics over extra features.
 - All auth state uses HA-native persistence (`ConfigEntry` + `Store`); no cookie files on disk.
+
+### Quick DB inspector: `scripts/query_ha_db.py`
+
+Use `scripts/query_ha_db.py` for fast, human-readable inspection of recorder statistics and states for a specific date or date range. It's handy when you want to:
+- Validate which `statistics_meta` rows exist for the integration.
+- Inspect smallest sums or suspicious rows for a day or range.
+- Find future-dated statistics rows and negative sums.
+- Spot missing or non-midnight rows before attempting recorder rewrites.
+
+Key flags:
+- `-d, --db` PATH — path to `home-assistant_v2.db` (defaults to `ha_config/home-assistant_v2.db`).
+- `-s, --start-date` YYYY-MM-DD — start date (optional; defaults to today).
+- `-e, --end-date` YYYY-MM-DD — end date (optional). If provided the query covers the inclusive range [start, end].
+- `-q, --quiet` — suppress verbose schema and per-entity dumps; useful for scripting.
+
+Examples (PowerShell):
+```powershell
+# single-day (defaults DB):
+python.exe .\scripts\query_ha_db.py -s 2026-04-01
+
+# date range:
+python.exe .\scripts\query_ha_db.py -s 2026-04-01 -e 2026-04-03
+
+# custom DB and quiet mode (machine-friendly summary):
+python.exe .\scripts\query_ha_db.py -d 'C:\path\home-assistant_v2.db' -s 2026-04-01 -q
+```
+
+When to run it: before and after importing or rewriting external statistics, or when debugging Energy Dashboard/recorder anomalies. It complements `scripts/query_ha_stats.py` by providing quick heuristics and human-friendly summaries.

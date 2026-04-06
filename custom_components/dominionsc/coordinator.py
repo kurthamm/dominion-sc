@@ -77,6 +77,15 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         stored = await self._store.async_load()
         if isinstance(stored, dict):
             self._state = self._merge_state(stored)
+        # Recompute totals from any persisted ledgers if totals appear missing
+        # or were not written by older state formats. This ensures the
+        # synthetic cumulative totals are available immediately after a
+        # restart and avoid negative Energy Dashboard deltas when recorder
+        # statistics exist but in-memory totals are zero.
+        try:
+            self._recompute_totals_from_ledgers()
+        except Exception:  # defensive: do not let a recompute break startup
+            _LOGGER.debug("Could not recompute totals from ledgers on setup", exc_info=True)
 
     @property
     def totals(self) -> dict[str, float]:
@@ -779,15 +788,10 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
                     row["date"],
                 )
                 return True
-            # Skip zero values for dates within lookback window (even if not all-zero)
-            # to avoid importing potentially incomplete data
-            if row_date >= lookback_cutoff:
-                if e_kwh == 0.0 or g_ccf == 0.0 or e_cost == 0.0 or g_cost == 0.0:
-                    _LOGGER.debug(
-                        "Skipping recent zero row (may be incomplete data): %s",
-                        row["date"],
-                    )
-                    return True
+            # NOTE: Per-fuel zero filtering (e.g. skip zero electric but keep
+            # gas) is handled at the individual _upsert_daily call sites in
+            # _daily_reconcile and _process_backfill, not here.  This method
+            # only skips the entire merged row when ALL values are zero.
         else:
             # Backfill / finalized data: trust zero for gas and cost,
             # but skip if ALL values are zero (likely a data gap in API)
@@ -820,6 +824,8 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         )
         rows = await self._fetch_daily_rows(start, end)
 
+        lookback_cutoff = now_date - timedelta(days=max(1, lookback))
+
         for row in rows:
             if self._is_future_placeholder(row, now_date):
                 _LOGGER.debug("Skipping future zero-value placeholder row: %s", row.get("date"))
@@ -827,10 +833,56 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             if self._should_skip_daily_row(row, now_date, is_backfill=False):
                 continue
             day_key = row["date"]
-            self._upsert_daily(f"electric|{day_key}", float(row["electric_usage_kwh"]), True, TOTAL_ELECTRIC_KWH)
-            self._upsert_daily(f"gas|{day_key}", float(row["gas_usage_ccf"]) * 100.0, True, TOTAL_GAS_FT3)
-            self._upsert_daily_cost(f"electric|{day_key}", float(row["electric_cost"]), True, TOTAL_ELECTRIC_COST)
-            self._upsert_daily_cost(f"gas|{day_key}", float(row["gas_cost"]), True, TOTAL_GAS_COST)
+
+            # --- Per-fuel zero filtering within the lookback window ---
+            # Dominion lags ~2 days; zeros within the window are placeholders.
+            # Filter per-fuel so real data for one fuel isn't blocked by
+            # the other fuel's placeholder zero.
+            try:
+                row_date = date.fromisoformat(str(day_key))
+            except (ValueError, TypeError):
+                row_date = None
+            in_lookback = row_date is not None and row_date >= lookback_cutoff
+
+            e_kwh = float(row["electric_usage_kwh"])
+            g_ft3 = float(row["gas_usage_ccf"]) * 100.0
+            e_cost = float(row["electric_cost"])
+            g_cost = float(row["gas_cost"])
+
+            # Electric consumption: skip zero within lookback (lag placeholder)
+            if in_lookback and e_kwh == 0.0:
+                _LOGGER.debug(
+                    "Daily reconcile: skipping zero electric consumption for %s (lookback placeholder)",
+                    day_key,
+                )
+            else:
+                self._upsert_daily(f"electric|{day_key}", e_kwh, True, TOTAL_ELECTRIC_KWH)
+
+            # Electric cost: skip zero within lookback (lag placeholder)
+            if in_lookback and e_cost == 0.0:
+                _LOGGER.debug(
+                    "Daily reconcile: skipping zero electric cost for %s (lookback placeholder)",
+                    day_key,
+                )
+            else:
+                self._upsert_daily_cost(f"electric|{day_key}", e_cost, True, TOTAL_ELECTRIC_COST)
+
+            # Gas consumption: skip zero within lookback only if cost is also zero
+            # (zero gas is legitimate in summer when cost is also zero, but within
+            # the lookback window it's more likely a placeholder)
+            if in_lookback and g_ft3 == 0.0 and g_cost == 0.0:
+                _LOGGER.debug(
+                    "Daily reconcile: skipping zero gas consumption+cost for %s (lookback placeholder)",
+                    day_key,
+                )
+            else:
+                self._upsert_daily(f"gas|{day_key}", g_ft3, True, TOTAL_GAS_FT3)
+
+            # Gas cost: skip zero within lookback only if consumption is also zero
+            if in_lookback and g_cost == 0.0 and g_ft3 == 0.0:
+                pass  # already logged above
+            else:
+                self._upsert_daily_cost(f"gas|{day_key}", g_cost, True, TOTAL_GAS_COST)
 
     async def _process_backfill(
         self,
@@ -881,10 +933,37 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             if self._should_skip_daily_row(row, today, is_backfill=True):
                 continue
             day_key = row["date"]
-            self._upsert_daily(f"electric|{day_key}", float(row["electric_usage_kwh"]), overwrite, TOTAL_ELECTRIC_KWH)
-            self._upsert_daily(f"gas|{day_key}", float(row["gas_usage_ccf"]) * 100.0, overwrite, TOTAL_GAS_FT3)
-            self._upsert_daily_cost(f"electric|{day_key}", float(row["electric_cost"]), overwrite, TOTAL_ELECTRIC_COST)
-            self._upsert_daily_cost(f"gas|{day_key}", float(row["gas_cost"]), overwrite, TOTAL_GAS_COST)
+
+            e_kwh = float(row["electric_usage_kwh"])
+            g_ft3 = float(row["gas_usage_ccf"]) * 100.0
+            e_cost = float(row["electric_cost"])
+            g_cost = float(row["gas_cost"])
+
+            # --- Per-fuel zero filtering for finalized/backfill cycles ---
+            # For finalized data, zero electric consumption is suspect
+            # (true zero essentially impossible — HA itself draws power).
+            # Trust zero for gas (legitimate in summer) and all cost series.
+            if e_kwh == 0.0:
+                _LOGGER.debug(
+                    "Backfill: skipping zero electric consumption for %s "
+                    "(finalized cycle — suspect placeholder)",
+                    day_key,
+                )
+            else:
+                self._upsert_daily(f"electric|{day_key}", e_kwh, overwrite, TOTAL_ELECTRIC_KWH)
+
+            # Electric cost: skip if electric consumption was zero (same placeholder)
+            if e_kwh == 0.0 and e_cost == 0.0:
+                _LOGGER.debug(
+                    "Backfill: skipping zero electric cost for %s (consumption also zero)",
+                    day_key,
+                )
+            else:
+                self._upsert_daily_cost(f"electric|{day_key}", e_cost, overwrite, TOTAL_ELECTRIC_COST)
+
+            # Gas: trust zero consumption and cost (legitimate in summer)
+            self._upsert_daily(f"gas|{day_key}", g_ft3, overwrite, TOTAL_GAS_FT3)
+            self._upsert_daily_cost(f"gas|{day_key}", g_cost, overwrite, TOTAL_GAS_COST)
 
         backfill = self._state["backfill"]
         if cycle.key in backfill["missing_cycles"]:
@@ -1151,6 +1230,68 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             "current_daily_usage": {},
             "current_bill_summary": {},
         }
+
+    def _recompute_totals_from_ledgers(self) -> None:
+        """Recompute totals from persisted ledgers.
+
+        Some older or partial stored states may be missing the pre-computed
+        `totals` keys. Recomputing from `daily_ledger`, `interval_ledger`,
+        and the cost ledgers guarantees the integration exposes monotonic
+        cumulative totals immediately after startup.
+        """
+        totals = {
+            TOTAL_ELECTRIC_KWH: 0.0,
+            TOTAL_GAS_FT3: 0.0,
+            TOTAL_ELECTRIC_COST: 0.0,
+            TOTAL_GAS_COST: 0.0,
+        }
+
+        # Sum daily and interval ledgers (guarding types)
+        for key, val in (self._state.get("daily_ledger", {}) or {}).items():
+            try:
+                if isinstance(key, str) and key.startswith("electric|"):
+                    totals[TOTAL_ELECTRIC_KWH] += float(val or 0.0)
+                elif isinstance(key, str) and key.startswith("gas|"):
+                    totals[TOTAL_GAS_FT3] += float(val or 0.0)
+            except Exception:
+                continue
+
+        for key, val in (self._state.get("interval_ledger", {}) or {}).items():
+            try:
+                if isinstance(key, str) and key.startswith("electric|"):
+                    totals[TOTAL_ELECTRIC_KWH] += float(val or 0.0)
+                elif isinstance(key, str) and key.startswith("gas|"):
+                    totals[TOTAL_GAS_FT3] += float(val or 0.0)
+            except Exception:
+                continue
+
+        # Sum cost ledgers
+        for key, val in (self._state.get("daily_cost_ledger", {}) or {}).items():
+            try:
+                if isinstance(key, str) and key.startswith("electric|"):
+                    totals[TOTAL_ELECTRIC_COST] += float(val or 0.0)
+                elif isinstance(key, str) and key.startswith("gas|"):
+                    totals[TOTAL_GAS_COST] += float(val or 0.0)
+            except Exception:
+                continue
+
+        for key, val in (self._state.get("interval_cost_ledger", {}) or {}).items():
+            try:
+                if isinstance(key, str) and key.startswith("electric|"):
+                    totals[TOTAL_ELECTRIC_COST] += float(val or 0.0)
+                elif isinstance(key, str) and key.startswith("gas|"):
+                    totals[TOTAL_GAS_COST] += float(val or 0.0)
+            except Exception:
+                continue
+
+        # Respect monotonicity vs any recorded last_totals
+        last = self._state.get("last_totals", {}) or {}
+        for k in list(totals.keys()):
+            totals[k] = max(float(totals[k]), float(last.get(k, 0.0)))
+
+        self._state["totals"] = totals
+        # Also set last_totals so the monotonic guard uses this baseline
+        self._state["last_totals"] = {k: float(v) for k, v in totals.items()}
 
     def _merge_state(self, stored: dict[str, Any]) -> dict[str, Any]:
         merged = self._default_state()
