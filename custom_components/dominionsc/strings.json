@@ -28,6 +28,13 @@
       "reconfigure": {
         "title": "Reconfigure Dominion SC Energy",
         "description": "Update your credentials and re-authenticate. If your username and password are unchanged, 2FA may be skipped."
+      },
+      "account": {
+        "title": "Select account",
+        "description": "Your Dominion login owns multiple accounts. Pick the one this Home Assistant integration should track. Add the integration again to track another account on the same login.",
+        "data": {
+          "account_number": "Account / Premise"
+        }
       }
     },
     "error": {
@@ -38,7 +45,9 @@
     },
     "abort": {
       "already_configured": "This account is already configured.",
-      "reconfigure_successful": "Reconfiguration successful."
+      "reconfigure_successful": "Reconfiguration successful.",
+      "account_listing_failed": "Could not retrieve account list from Dominion.",
+      "no_accounts_found": "No accounts found on this Dominion login."
     }
   },
   "options": {

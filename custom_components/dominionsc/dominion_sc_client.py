@@ -41,6 +41,7 @@ class DominionSCClient:
         
         # Account
         "account_listing": "/AccountManagementWebApi/GetAccountListing/",
+        "select_account": "/AccountManagementWebApi/SelectAccount/",
         "account_summary": "/AccountSummaryWebApi/InitAccount/",
         "account_menu": "/CommonWebApi/GetAccountMenuLinks/",
         
@@ -64,19 +65,41 @@ class DominionSCClient:
         response = self._api_request(endpoint_key="account_listing")
         data = response.get("data", {})
         accounts = []
-        if data.get("singleAccount"):
-            return accounts
-        for acct in data.get("accounts", []):
+        # Dominion's response field is "accountListing" (not "accounts").
+        # Fall back to "accounts" in case their API ever changes.
+        acct_list = data.get("accountListing") or data.get("accounts", [])
+        for acct in acct_list:
             accounts.append({
                 "account_number": acct.get("accountNumber", ""),
+                "account_number_formatted": acct.get("accountNumberFormatted", ""),
                 "service_address": acct.get("serviceAddress", ""),
                 "account_status": acct.get("accountStatus", ""),
-                "nickname": acct.get("nickname", ""),
-                "is_closed": acct.get("accountClosed", False),
+                "nickname": acct.get("accountNickname") or acct.get("nickname", ""),
+                "is_closed": acct.get("closedAccount", acct.get("accountClosed", False)),
                 "has_ami_meter": acct.get("hasAMIMeter", False),
-                "sbu": acct.get("accountSbu", "")
+                "sbu": acct.get("sbuText") or acct.get("accountSbu", ""),
+                "town": acct.get("accountTown", ""),
             })
         return accounts
+
+    def select_account(self, account_number: str) -> dict:
+        """
+        Set the server-side CurrentAccount for this session. Required before
+        InitAccount / AccountSummary / daily-usage calls on multi-account logins.
+
+        The portal POSTs to /AccountManagementWebApi/SelectAccount/ with body:
+            {"EncryptedAccountNumber":"<blob>","_df":""}
+        Note the PascalCase field name — regular `accountNumber` is rejected.
+        """
+        if not account_number:
+            return {}
+        body = {"EncryptedAccountNumber": account_number, "_df": ""}
+        return self._api_request(
+            endpoint_key="select_account",
+            method="POST",
+            data=body,
+            check_response_type=False,
+        )
 
     def get_account_summary(self, account_number: str = None):
         """
@@ -339,6 +362,11 @@ class DominionSCClient:
         if endpoint_key in ("sdkinit"):
             headers["Referer"] = self.LOGIN_URL
             headers["Origin"] = self.BASE_URL
+        # POST endpoints like SelectAccount appear to require Origin/Referer
+        # (session-scoped CSRF check). Add them for all non-login POSTs too.
+        if method.upper() == "POST" and "Referer" not in headers:
+            headers["Referer"] = self.BASE_URL + "/"
+            headers["Origin"] = self.BASE_URL
         if method.upper() == "POST":
             resp = self.session.post(url, params=params, json=data, headers=headers, timeout=self.timeout)
         else:
@@ -406,6 +434,14 @@ class DominionSCClient:
         """Mark authenticated and bootstrap Bidgely session for downstream API calls."""
         self._logged_in = True
         self._pending_2fa = False
+        # Refresh the anti-forgery token now that we're authenticated — the one
+        # picked up from the anonymous login page is bound to user "" and will
+        # be rejected by POST endpoints (SelectAccount) that do strict user-check.
+        try:
+            self._verification_token = None
+            self._ensure_verification_token()
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.warning("Post-login AFT refresh failed: %s", err)
         try:
             self._wc_session = self._init_bidgely()
         except Exception as err:  # pylint: disable=broad-except

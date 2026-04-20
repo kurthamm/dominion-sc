@@ -5,6 +5,7 @@ PLATFORMS = ["sensor", "button"]
 
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
+CONF_ACCOUNT_NUMBER = "account_number"
 CONF_VERIFY_SSL = "verify_ssl"
 CONF_POLL_MINUTES = "poll_minutes"
 CONF_BACKFILL_CYCLES_TARGET = "backfill_cycles_target"
