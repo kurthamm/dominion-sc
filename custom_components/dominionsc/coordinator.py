@@ -393,25 +393,23 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         _LOGGER.info("Cleared external statistic IDs: %s", statistic_ids)
 
     def get_statistic_id(self, total_key: str) -> str | None:
-        """Return recorder statistic_id (sensor entity based) used by Energy Dashboard."""
-        # The actual entity IDs created by this integration use the device
-        # name "Dominion SC Energy" and HA's entity naming rules. Those
-        # entities are generated as e.g.
-        #   sensor.dominion_sc_energy_electric_cumulative_consumption
-        # Importing statistics under the plain names (e.g. "sensor.electric_cumulative_consumption")
-        # will not link the recorder statistics to the real entity_id and
-        # therefore they won't appear as selectable Energy Dashboard sensors.
-        #
-        # Use the device-based entity IDs so recorder data matches the
-        # actual `entity_id` present in the entity registry.
-        base = "dominion_sc_energy"
-        mapping = {
-            TOTAL_ELECTRIC_KWH: f"sensor.{base}_electric_cumulative_consumption",
-            TOTAL_GAS_FT3: f"sensor.{base}_gas_cumulative_consumption",
-            TOTAL_ELECTRIC_COST: f"sensor.{base}_electric_cumulative_cost",
-            TOTAL_GAS_COST: f"sensor.{base}_gas_cumulative_cost",
-        }
-        return mapping.get(total_key)
+        """Return THIS config entry's real sensor entity_id used by the Energy Dashboard.
+
+        Resolve the entity_id from the entity registry by the same unique_id the
+        sensors register with (``f"{entry_id}_{total_key}"``). A hardcoded
+        device-name base (e.g. ``dominion_sc_energy``) breaks multi-account
+        setups: when a second account's entities are renamed (e.g.
+        ``sensor.bermuda_hills_*`` / ``sensor.riding_ridge_*``) the imported
+        statistics land on a dead statistic_id that no dashboard reads, and every
+        config entry collides onto that same shared series. Resolving per entry
+        sends each account's statistics to the sensor the dashboard charts.
+        """
+        from homeassistant.helpers import entity_registry as er  # pylint: disable=import-outside-toplevel
+
+        ent_reg = er.async_get(self.hass)
+        return ent_reg.async_get_entity_id(
+            "sensor", DOMAIN, f"{self.config_entry.entry_id}_{total_key}"
+        )
 
     def get_legacy_external_statistic_id(self, total_key: str) -> str | None:
         """Return previous custom external statistic_id used by older integration versions."""
