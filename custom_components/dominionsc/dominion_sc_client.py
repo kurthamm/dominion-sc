@@ -64,6 +64,18 @@ class DominionSCClient:
         """
         response = self._api_request(endpoint_key="account_listing")
         data = response.get("data", {})
+        # DEBUG: log full structure so multi-premise / single-account edge cases are diagnosable
+        try:
+            import logging as _lg, json as _js
+            _lg.getLogger(__name__).debug(
+                "DominionSC get_account_listing raw data keys=%s singleAccount=%s accounts_len=%s full=%s",
+                list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+                data.get("singleAccount") if isinstance(data, dict) else None,
+                len(data.get("accounts", [])) if isinstance(data, dict) else None,
+                _js.dumps(data)[:2000] if isinstance(data, dict) else str(data)[:500],
+            )
+        except Exception:
+            pass
         accounts = []
         # Dominion's response field is "accountListing" (not "accounts").
         # Fall back to "accounts" in case their API ever changes.
@@ -94,12 +106,21 @@ class DominionSCClient:
         if not account_number:
             return {}
         body = {"EncryptedAccountNumber": account_number, "_df": ""}
-        return self._api_request(
+        response = self._api_request(
             endpoint_key="select_account",
             method="POST",
             data=body,
             check_response_type=False,
         )
+        try:
+            import logging as _lg, json as _js
+            _lg.getLogger(__name__).debug(
+                "DominionSC select_account OK response=%s",
+                _js.dumps(response)[:400] if isinstance(response, dict) else str(response)[:200],
+            )
+        except Exception:
+            pass
+        return response
 
     def get_account_summary(self, account_number: str = None):
         """
@@ -372,8 +393,28 @@ class DominionSCClient:
         else:
             resp = self.session.get(url, params=params, headers=headers, timeout=self.timeout)
         if resp.status_code in (401, 403):
+            try:
+                import logging as _lg
+                _lg.getLogger(__name__).debug(
+                    "DominionSC %s %s %s body=%s resp_cookies=%s",
+                    method.upper(), endpoint_key or url, resp.status_code,
+                    (resp.text or "")[:800],
+                    list(resp.cookies.keys()),
+                )
+            except Exception:
+                pass
             self._logged_in = False
             raise Exception("Session expired")
+        if resp.status_code >= 400:
+            try:
+                import logging as _lg
+                _lg.getLogger(__name__).debug(
+                    "DominionSC %s %s %s body=%s",
+                    method.upper(), endpoint_key or url, resp.status_code,
+                    (resp.text or "")[:1000],
+                )
+            except Exception:
+                pass
         resp.raise_for_status()
         result = resp.json()
         if check_response_type and isinstance(result, dict) and "responseType" in result:

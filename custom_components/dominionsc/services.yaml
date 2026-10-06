@@ -24,6 +24,14 @@ run_backfill:
       selector:
         boolean:
 
+    cycle_key:
+      name: Cycle key
+      description: "Re-process one specific billing cycle as start|end (e.g. 2026-08-01|2026-08-31) instead of the next missing / first completed cycle. Combine with overwrite to replace stored values."
+      required: false
+      example: "2026-08-01|2026-08-31"
+      selector:
+        text:
+
 rewrite_statistics:
   name: Rewrite statistics
   description: Clear legacy dominionsc external statistics so Energy Dashboard uses recorder sensor statistics only.

@@ -404,11 +404,11 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
         Resolve the entity_id from the entity registry by the same unique_id the
         sensors register with (``f"{entry_id}_{total_key}"``). A hardcoded
         device-name base (e.g. ``dominion_sc_energy``) breaks multi-account
-        setups: when a second account's entities are renamed (e.g.
-        ``sensor.bermuda_hills_*`` / ``sensor.riding_ridge_*``) the imported
-        statistics land on a dead statistic_id that no dashboard reads, and every
-        config entry collides onto that same shared series. Resolving per entry
-        sends each account's statistics to the sensor the dashboard charts.
+        setups: when entities are renamed (e.g. ``sensor.bermuda_hills_*`` /
+        ``sensor.riding_ridge_*``) the imported statistics land on a dead id no
+        dashboard reads, and every config entry collides onto the same series.
+        Resolving per entry sends each account's statistics to the sensor the
+        dashboard actually charts.
         """
         from homeassistant.helpers import entity_registry as er  # pylint: disable=import-outside-toplevel
 
@@ -933,7 +933,8 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             # Manual invocation: if there are no missing cycles, warn and exit
             backfill_state = self._state.get("backfill", {})
             missing = backfill_state.get("missing_cycles", []) if isinstance(backfill_state, dict) else []
-            if not missing:
+            # An explicit cycle_key targets one cycle regardless of the missing list.
+            if not missing and not cycle_key:
                 _LOGGER.warning(
                     "Manual backfill requested but no incomplete backfill cycles to process for entry=%s",
                     self.config_entry.entry_id,
