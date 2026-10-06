@@ -30,6 +30,9 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Config-entry only integration: no YAML configuration is accepted.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN) if cv is not None else None
+
 
 SERVICE_SCHEMA = (
     vol.Schema(

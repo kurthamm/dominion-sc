@@ -1,18 +1,18 @@
 {
   "domain": "dominionsc",
   "name": "Dominion SC Energy",
-  "version": "2026.10.06.02",
-  "config_flow": true,
-  "iot_class": "cloud_polling",
-  "documentation": "https://github.com/kurthamm/dominion-sc",
-  "requirements": [
-    "beautifulsoup4>=4.12.3"
-  ],
-  "dependencies": [
-    "recorder"
-  ],
   "codeowners": [
     "@kurthamm"
   ],
-  "issue_tracker": "https://github.com/kurthamm/dominion-sc/issues"
+  "config_flow": true,
+  "dependencies": [
+    "recorder"
+  ],
+  "documentation": "https://github.com/kurthamm/dominion-sc",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/kurthamm/dominion-sc/issues",
+  "requirements": [
+    "beautifulsoup4>=4.12.3"
+  ],
+  "version": "2026.10.06.02"
 }
