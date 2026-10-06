@@ -14,6 +14,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    CONF_ACCOUNT_NUMBER,
     CONF_BACKFILL_CYCLES_TARGET,
     CONF_DAILY_LOOKBACK_DAYS,
     CONF_PASSWORD,
@@ -335,16 +336,21 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
     async def _async_update_data(self) -> dict[str, float]:
         try:
             await self._ensure_authenticated()
+            account_number = self.config_entry.data.get(CONF_ACCOUNT_NUMBER) or None
             # Fetch account and billing data used by informational sensors.
             # Use the executor because the client uses blocking requests.
             try:
-                account_summary = await self.hass.async_add_executor_job(self._client.get_account_summary)
+                account_summary = await self.hass.async_add_executor_job(
+                    self._client.get_account_summary, account_number
+                )
                 self._state["account_summary"] = account_summary
             except Exception as err:  # pylint: disable=broad-except
                 _LOGGER.warning("Could not fetch account_summary: %s", err)
 
             try:
-                current_daily = await self.hass.async_add_executor_job(self._client.get_current_daily_usage)
+                current_daily = await self.hass.async_add_executor_job(
+                    lambda: self._client.get_current_daily_usage(account_number=account_number)
+                )
                 # store entire current_daily payload and the summarized bill_summary
                 self._state["current_daily_usage"] = current_daily
                 self._state["current_bill_summary"] = current_daily.get("bill_summary", {})
@@ -644,6 +650,31 @@ class DominionSCCoordinator(DataUpdateCoordinator[dict[str, float]]):
             new_data[CONF_TFA_TOKEN] = refreshed_token
             self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
             _LOGGER.info("Updated stored tfa token for entry=%s", self.config_entry.entry_id)
+
+        # Prime server-side account context so the Bidgely session (created lazily
+        # on first usage call) is keyed to THIS entry's selected account.
+        # Multi-account logins require a POST to SelectAccount FIRST; InitAccount
+        # reads session.CurrentAccount and 500s ("CurrentAccount was null") without it.
+        account_number = self.config_entry.data.get(CONF_ACCOUNT_NUMBER)
+        if account_number:
+            try:
+                # 1. Select the account server-side (sets session.CurrentAccount).
+                await self.hass.async_add_executor_job(
+                    self._client.select_account, account_number
+                )
+                # 2. Now InitAccount can be called; listing/listing-context warmup.
+                await self.hass.async_add_executor_job(
+                    self._client.get_account_summary, account_number
+                )
+                # Force Bidgely re-init if the wc-session was created against
+                # a different account (e.g. after HA restart).
+                self._client._bidgely_client = None  # pylint: disable=protected-access
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.warning(
+                    "Failed to prime account context for %s: %s",
+                    account_number,
+                    err,
+                )
 
     async def _process_intervals(self, now_dt: datetime) -> None:
         start = now_dt - timedelta(hours=2)

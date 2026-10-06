@@ -15,6 +15,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    CONF_ACCOUNT_NUMBER,
     CONF_BACKFILL_CYCLES_TARGET,
     CONF_DAILY_LOOKBACK_DAYS,
     CONF_PASSWORD,
@@ -45,6 +46,7 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     _selected_tfa_option: dict[str, Any] | None
     _is_reconfigure: bool
     _reconfig_entry: config_entries.ConfigEntry | None
+    _account_options: list[dict[str, Any]]
 
     def __init__(self) -> None:
         self._user_data = {}
@@ -53,14 +55,13 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._selected_tfa_option = None
         self._is_reconfigure = False
         self._reconfig_entry = None
+        self._account_options = []
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
         if user_input is not None:
-            # During reconfigure, skip unique-id abort (we're updating the same entry)
-            if not self._is_reconfigure:
-                await self.async_set_unique_id(user_input[CONF_USERNAME])
-                self._abort_if_unique_id_configured()
+            # Unique-id check is deferred until after we know the account_number
+            # (many Dominion logins own multiple premises / accounts).
 
             self._user_data = {
                 CONF_USERNAME: user_input[CONF_USERNAME],
@@ -107,7 +108,7 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 if self._client.tfa_token:
                     self._user_data[CONF_TFA_TOKEN] = self._client.tfa_token
-                return await self._async_finish()
+                return await self._async_route_to_account_step()
             except Exception as err:  # pylint: disable=broad-except
                 payload = err.args[0] if err.args else None
                 if isinstance(payload, dict) and "2fa_required" in payload:
@@ -227,7 +228,7 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 else:
                     if self._client.tfa_token:
                         self._user_data[CONF_TFA_TOKEN] = self._client.tfa_token
-                    return await self._async_finish()
+                    return await self._async_route_to_account_step()
             except Exception as err:  # pylint: disable=broad-except
                 err_str = str(err).lower()
                 if "invalid verification code" in err_str:
@@ -261,20 +262,91 @@ class DominionSCConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Delegate to the standard user step (form will be pre-filled)
         return await self.async_step_user(user_input)
 
+    async def _async_route_to_account_step(self):
+        """After successful auth, fetch accounts and route to picker (or auto-select)."""
+        try:
+            accounts = await self.hass.async_add_executor_job(
+                self._client.get_account_listing
+            )
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception("Dominion SC: failed to fetch account listing")
+            return self.async_abort(reason="account_listing_failed")
+
+        if not accounts:
+            return self.async_abort(reason="no_accounts_found")
+
+        self._account_options = accounts
+
+        # Single account — auto-select, no extra prompt.
+        if len(accounts) == 1:
+            self._user_data[CONF_ACCOUNT_NUMBER] = str(accounts[0].get("account_number", ""))
+            return await self._async_finish()
+
+        # Multi-account — show the picker.
+        return await self.async_step_account()
+
+    async def async_step_account(self, user_input: dict[str, Any] | None = None):
+        """Pick which Dominion account/premise this HA instance should track."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._user_data[CONF_ACCOUNT_NUMBER] = str(user_input[CONF_ACCOUNT_NUMBER])
+            return await self._async_finish()
+
+        # Map the opaque (encrypted) account_number to a friendly label.
+        # Dominion returns accountNumber as a base64 blob used server-side,
+        # and accountNumberFormatted like "1-5583" for display.
+        choices: dict[str, str] = {}
+        for a in self._account_options:
+            acct = str(a.get("account_number", ""))
+            friendly = a.get("account_number_formatted") or acct
+            addr = a.get("service_address") or a.get("address") or a.get("premise") or ""
+            label = friendly + (f" — {addr}" if addr else "")
+            choices[acct] = label
+
+        schema = vol.Schema({vol.Required(CONF_ACCOUNT_NUMBER): vol.In(choices)})
+        return self.async_show_form(step_id="account", data_schema=schema, errors=errors)
+
     async def _async_finish(self):
-        """Create or update the config entry after successful auth."""
+        """Create or update the config entry after successful auth + account selection."""
+        username = self._user_data.get(CONF_USERNAME, "")
+        account_number = self._user_data.get(CONF_ACCOUNT_NUMBER, "")
+        unique_id = f"{username}_{account_number}" if account_number else username
+
+        # Look up a friendly label / address from account_options for the title.
+        friendly = ""
+        address = ""
+        for a in self._account_options:
+            if str(a.get("account_number", "")) == account_number:
+                friendly = a.get("account_number_formatted") or ""
+                address = a.get("service_address") or ""
+                break
+
         if self._is_reconfigure and self._reconfig_entry:
             _LOGGER.debug(
-                "Reconfigure: updating entry %s",
+                "Reconfigure: updating entry %s (unique_id=%s)",
                 self._reconfig_entry.entry_id,
+                unique_id,
             )
             return self.async_update_reload_and_abort(
                 self._reconfig_entry,
                 data=self._user_data,
+                unique_id=unique_id,
             )
 
-        # New entry
-        return self.async_create_entry(title="Dominion SC Energy", data=self._user_data)
+        # New entry — enforce uniqueness now that we know account_number
+        await self.async_set_unique_id(unique_id)
+        self._abort_if_unique_id_configured()
+
+        # Prefer friendly "1-5583 — 2421 BERMUDA HILLS RD" title over encrypted blob
+        if friendly and address:
+            title = f"Dominion SC {friendly} — {address}"
+        elif friendly:
+            title = f"Dominion SC {friendly}"
+        elif account_number:
+            title = f"Dominion SC ({account_number[:12]}…)"
+        else:
+            title = "Dominion SC Energy"
+        return self.async_create_entry(title=title, data=self._user_data)
 
 
 class DominionSCOptionsFlow(config_entries.OptionsFlow):
